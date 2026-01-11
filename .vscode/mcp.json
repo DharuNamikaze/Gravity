@@ -1,0 +1,12 @@
+{
+    "servers": {
+        "devtools-bridge": {
+            "type": "stdio",
+            "command": "node",
+            "args": [
+                "D:\\Dharu\\MCP\\Gravity\\mcp-server\\build\\index.js"
+            ],
+        }
+    }
+    , "inputs": []
+}

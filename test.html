@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DevTools Bridge Test</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        #modal {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 400px;
+            height: 300px;
+            background: white;
+            border: 2px solid #333;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            z-index: 1000;
+        }
+        
+        .offscreen-element {
+            position: absolute;
+            left: -100px;
+            top: 50px;
+            width: 200px;
+            height: 100px;
+            background: red;
+            color: white;
+            padding: 10px;
+        }
+        
+        .large-element {
+            width: 2000px;
+            height: 100px;
+            background: blue;
+            color: white;
+            padding: 10px;
+            margin: 20px 0;
+        }
+        
+        .hidden-element {
+            display: none;
+            width: 200px;
+            height: 100px;
+            background: green;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DevTools Bridge Test Page</h1>
+        <p>This page contains various elements to test layout diagnostics:</p>
+        
+        <div id="modal">
+            <h2>Modal Dialog</h2>
+            <p>This is a centered modal that should be properly positioned.</p>
+            <button onclick="this.parentElement.style.display='none'">Close</button>
+        </div>
+        
+        <div class="offscreen-element">
+            This element is positioned off-screen to the left
+        </div>
+        
+        <div class="large-element">
+            This element is wider than the viewport and should trigger offscreen-right issues
+        </div>
+        
+        <div class="hidden-element">
+            This element is hidden with display: none
+        </div>
+        
+        <div id="normal-element" style="width: 300px; height: 200px; background: lightblue; padding: 10px; margin: 20px 0;">
+            This is a normal element that should have no layout issues
+        </div>
+        
+        <h2>Test Instructions:</h2>
+        <ol>
+            <li>Install the DevTools Bridge Chrome extension</li>
+            <li>Open this page in Chrome</li>
+            <li>Click the extension icon and connect to this tab</li>
+            <li>Run the MCP server and test different selectors:
+                <ul>
+                    <li><code>#modal</code> - Should be properly positioned</li>
+                    <li><code>.offscreen-element</code> - Should detect offscreen-left issue</li>
+                    <li><code>.large-element</code> - Should detect offscreen-right issue</li>
+                    <li><code>.hidden-element</code> - Should detect display:none issue</li>
+                    <li><code>#normal-element</code> - Should have no issues</li>
+                </ul>
+            </li>
+        </ol>
+    </div>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+    "mcpServers": {
+      "devtools-bridge": {
+        "command": "node",
+        "args": [
+          "D:\\Dharu\\MCP\\Gravity\\mcp-server\\build\\index.js"
+        ],
+        "disabled": false,
+        "autoApprove": [
+          "diagnose_layout",
+          "connect_browser"
+        ]
+      }
+    }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "com.devtools.bridge",
+  "description": "DevTools Bridge Native Messaging Host - connects Chrome extension to MCP server",
+  "path": "D:\\Dharu\\MCP\\Gravity\\native-host\\devtools-bridge-host.bat",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://obbdpgeepnljijacceafmgdendjjelhb/"
+  ]
+}

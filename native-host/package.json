@@ -1,0 +1,12 @@
+{
+  "name": "devtools-bridge-native-host",
+  "version": "0.1.0",
+  "description": "Native messaging host for DevTools Bridge - bridges Chrome extension to MCP server",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "ws": "^8.14.0"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "devtools-bridge",
+  "version": "0.1.0",
+  "description": "WebSocket bridge for DevTools MCP integration",
+  "main": "websocket-bridge.js",
+  "scripts": {
+    "start": "node websocket-bridge.js",
+    "bridge": "node websocket-bridge.js"
+  },
+  "dependencies": {
+    "ws": "^8.14.2"
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}
