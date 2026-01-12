@@ -16,6 +16,7 @@ let debuggerState = {
 // Native messaging state
 let nativePort = null;
 let nativeHostConnected = false;
+let keepAliveInterval = null;
 
 // ============================================================================
 // Native Messaging (Extension <-> Native Host)
@@ -44,10 +45,14 @@ function connectNativeHost() {
       console.log('Native host disconnected:', error?.message || 'unknown reason');
       nativePort = null;
       nativeHostConnected = false;
+      stopKeepAlive();
     });
     
     nativeHostConnected = true;
     console.log('Connected to native messaging host');
+    
+    // Start keep-alive to prevent service worker termination
+    startKeepAlive();
     
   } catch (error) {
     console.error('Failed to connect to native host:', error);
@@ -57,9 +62,40 @@ function connectNativeHost() {
 }
 
 /**
+ * Keep-alive mechanism to prevent service worker termination
+ */
+function startKeepAlive() {
+  if (keepAliveInterval) return;
+  
+  keepAliveInterval = setInterval(() => {
+    if (nativePort) {
+      // Send a no-op message to keep the connection alive
+      try {
+        nativePort.postMessage({ type: 'keep-alive' });
+      } catch (e) {
+        // Connection may be dead
+        stopKeepAlive();
+      }
+    }
+  }, 20000); // Every 20 seconds
+}
+
+/**
+ * Stop keep-alive mechanism
+ */
+function stopKeepAlive() {
+  if (keepAliveInterval) {
+    clearInterval(keepAliveInterval);
+    keepAliveInterval = null;
+  }
+}
+
+/**
  * Disconnect from native messaging host
  */
 function disconnectNativeHost() {
+  stopKeepAlive();
+  
   if (nativePort) {
     nativePort.disconnect();
     nativePort = null;

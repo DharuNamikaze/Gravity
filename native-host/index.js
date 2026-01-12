@@ -86,7 +86,9 @@ function setupStdinReader() {
   process.stdin.on('readable', () => {
     let chunk;
     while ((chunk = process.stdin.read()) !== null) {
-      buffer = Buffer.concat([buffer, chunk]);
+      // Ensure chunk is always a Buffer
+      const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, 'utf8');
+      buffer = Buffer.concat([buffer, chunkBuffer]);
       
       while (true) {
         if (pendingLength === 0) {
@@ -223,7 +225,12 @@ function sendToMCPServer(message) {
  * Forward CDP responses to MCP server
  */
 function handleExtensionMessage(message) {
-  // Forward all messages to MCP server
+  // Ignore keep-alive messages
+  if (message.type === 'keep-alive') {
+    return;
+  }
+  
+  // Forward all other messages to MCP server
   // The extension sends CDP responses back through here
   sendToMCPServer(message);
 }
