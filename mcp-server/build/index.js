@@ -8,7 +8,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, } from "@modelcontextprotocol/sdk/types.js";
-import { startNativeBridge, stopNativeBridge, sendCDPCommand, isNativeHostConnected } from "./native-bridge.js";
+import { startNativeBridge, stopNativeBridge, sendCDPCommand, isNativeHostConnected, ensureConnected } from "./native-bridge.js";
 // ============================================================================
 // Diagnostic Helper Functions
 // ============================================================================
@@ -325,8 +325,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     try {
         if (name === "connect_browser") {
-            // connect_browser is now informational - the WebSocket server is already running
-            const connected = isNativeHostConnected();
+            // Try to connect if not already connected
+            const connected = await ensureConnected(5000);
             return {
                 content: [
                     {

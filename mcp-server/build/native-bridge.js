@@ -4,94 +4,124 @@
  * Architecture:
  * MCP Server <--WebSocket--> Native Host <--Native Messaging--> Chrome Extension
  */
-import { WebSocketServer, WebSocket } from 'ws';
+import { WebSocket } from 'ws';
 // State
-let wss = null;
-let nativeConnection = null;
+let socket = null;
+let isConnected = false;
 let messageIdCounter = 1;
 // Pending CDP requests waiting for responses
 const pendingCDPRequests = new Map();
 // Configuration
 const CDP_TIMEOUT = 10000; // 10 seconds
+const RECONNECT_INTERVAL = 2000; // 2 seconds between reconnect attempts
+const MAX_RECONNECT_ATTEMPTS = Infinity; // Keep trying forever
+// Reconnection state
+let reconnectTimer = null;
+let reconnectAttempts = 0;
+let targetPort = 9224;
 /**
- * Start WebSocket server that native host connects to
+ * Start WebSocket client and connect to native host
+ * Will auto-reconnect if connection fails or drops
  */
 export function startNativeBridge(port = 9224) {
-    return new Promise((resolve, reject) => {
-        if (wss) {
-            console.error('Native bridge already started');
-            resolve();
-            return;
-        }
-        try {
-            wss = new WebSocketServer({ port }, () => {
-                console.error(`📡 Native bridge WebSocket server listening on ws://localhost:${port}`);
-                resolve();
-            });
-            wss.on('connection', (ws) => {
-                console.error('✅ Native host connected');
-                // Only allow one connection at a time
-                if (nativeConnection) {
-                    console.error('Closing existing native host connection');
-                    nativeConnection.close();
-                }
-                nativeConnection = ws;
-                ws.on('message', (data) => {
-                    try {
-                        const message = JSON.parse(data.toString());
-                        handleNativeMessage(message);
-                    }
-                    catch (error) {
-                        console.error('Failed to parse message from native host:', error);
-                    }
-                });
-                ws.on('close', () => {
-                    console.error('❌ Native host disconnected');
-                    if (nativeConnection === ws) {
-                        nativeConnection = null;
-                    }
-                    // Reject all pending requests
-                    for (const [id, pending] of pendingCDPRequests) {
-                        clearTimeout(pending.timeout);
-                        pending.reject(new Error('Native host disconnected'));
-                        pendingCDPRequests.delete(id);
-                    }
-                });
-                ws.on('error', (error) => {
-                    console.error('Native host WebSocket error:', error);
-                });
-            });
-            wss.on('error', (error) => {
-                console.error('❌ WebSocket server error:', error);
-                if (error.code === 'EADDRINUSE') {
-                    console.error(`Port ${port} is already in use. Trying to reuse existing server...`);
-                    // Try to recover by waiting a bit and retrying
-                    setTimeout(() => {
-                        if (!wss) {
-                            startNativeBridge(port).then(resolve).catch(reject);
-                        }
-                    }, 1000);
-                }
-            });
-        }
-        catch (error) {
-            console.error('Failed to create WebSocket server:', error);
-            reject(error);
-        }
+    targetPort = port;
+    return new Promise((resolve) => {
+        // Always resolve immediately - connection happens in background
+        // This prevents MCP server startup from blocking on native host
+        scheduleConnect(true);
+        resolve();
     });
 }
 /**
- * Stop the WebSocket server
+ * Schedule a connection attempt
+ */
+function scheduleConnect(immediate = false) {
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+    const delay = immediate ? 0 : RECONNECT_INTERVAL;
+    reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        attemptConnect();
+    }, delay);
+}
+/**
+ * Attempt to connect to native host
+ */
+function attemptConnect() {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+        return; // Already connected
+    }
+    // Clean up any existing socket
+    if (socket) {
+        socket.removeAllListeners();
+        socket.close();
+        socket = null;
+    }
+    const url = `ws://localhost:${targetPort}`;
+    reconnectAttempts++;
+    if (reconnectAttempts === 1) {
+        console.error(`🔌 Connecting to native host at ${url}...`);
+    }
+    else if (reconnectAttempts % 10 === 0) {
+        console.error(`🔌 Still trying to connect to native host... (attempt ${reconnectAttempts})`);
+    }
+    const ws = new WebSocket(url);
+    socket = ws;
+    ws.on('open', () => {
+        console.error('✅ Connected to native host');
+        isConnected = true;
+        reconnectAttempts = 0;
+    });
+    ws.on('message', (data) => {
+        try {
+            const message = JSON.parse(data.toString());
+            handleNativeMessage(message);
+        }
+        catch (error) {
+            console.error('Failed to parse message from native host:', error);
+        }
+    });
+    ws.on('close', () => {
+        console.error('❌ Native host connection closed');
+        isConnected = false;
+        socket = null;
+        // Reject all pending requests
+        for (const [id, pending] of pendingCDPRequests) {
+            clearTimeout(pending.timeout);
+            pending.reject(new Error('Native host disconnected'));
+            pendingCDPRequests.delete(id);
+        }
+        pendingCDPRequests.clear();
+        // Auto-reconnect
+        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+            scheduleConnect();
+        }
+    });
+    ws.on('error', (error) => {
+        // ECONNREFUSED is expected when native host isn't running yet
+        if (error.code !== 'ECONNREFUSED') {
+            console.error('Native host WebSocket error:', error.message);
+        }
+        // Socket will emit 'close' after 'error', which triggers reconnect
+    });
+}
+/**
+ * Stop the WebSocket client
  */
 export function stopNativeBridge() {
-    if (nativeConnection) {
-        nativeConnection.close();
-        nativeConnection = null;
+    // Stop reconnection attempts
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
     }
-    if (wss) {
-        wss.close();
-        wss = null;
+    if (socket) {
+        socket.removeAllListeners();
+        socket.close();
+        socket = null;
     }
+    isConnected = false;
     // Clear pending requests
     for (const [id, pending] of pendingCDPRequests) {
         clearTimeout(pending.timeout);
@@ -103,7 +133,28 @@ export function stopNativeBridge() {
  * Check if native host is connected
  */
 export function isNativeHostConnected() {
-    return nativeConnection !== null && nativeConnection.readyState === WebSocket.OPEN;
+    return socket !== null && socket.readyState === WebSocket.OPEN;
+}
+/**
+ * Force an immediate connection attempt if not connected
+ * Returns a promise that resolves when connected or after timeout
+ */
+export async function ensureConnected(timeoutMs = 5000) {
+    // Already connected
+    if (isNativeHostConnected()) {
+        return true;
+    }
+    // Trigger immediate connection attempt
+    scheduleConnect(true);
+    // Wait for connection with timeout
+    const startTime = Date.now();
+    while (Date.now() - startTime < timeoutMs) {
+        if (isNativeHostConnected()) {
+            return true;
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    return isNativeHostConnected();
 }
 /**
  * Send CDP command to browser via native host
@@ -129,7 +180,7 @@ export async function sendCDPCommand(method, params = {}) {
             params
         };
         try {
-            nativeConnection.send(JSON.stringify(message));
+            socket.send(JSON.stringify(message));
             console.error(`Sent CDP command: ${method} (id: ${id})`);
         }
         catch (error) {

@@ -12,7 +12,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { startNativeBridge, stopNativeBridge, sendCDPCommand, isNativeHostConnected } from "./native-bridge.js";
+import { startNativeBridge, stopNativeBridge, sendCDPCommand, isNativeHostConnected, ensureConnected } from "./native-bridge.js";
 
 // ============================================================================
 // Layout Diagnostic Types
@@ -414,8 +414,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     if (name === "connect_browser") {
-      // connect_browser is now informational - the WebSocket server is already running
-      const connected = isNativeHostConnected();
+      // Try to connect if not already connected
+      const connected = await ensureConnected(5000);
       
       return {
         content: [

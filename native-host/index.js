@@ -30,10 +30,24 @@ const logStream = fs.createWriteStream(LOG_FILE, { flags: 'a' });
 
 function log(message) {
   const timestamp = new Date().toISOString();
-  logStream.write(`[${timestamp}] ${message}\n`);
+  try {
+    logStream.write(`[${timestamp}] ${message}\n`);
+  } catch (e) {
+    // Ignore log errors
+  }
 }
 
-log('Native host starting...');
+// Global error handlers to prevent silent exits
+process.on('uncaughtException', (error) => {
+  log(`CRITICAL: Uncaught Exception: ${error.message}\n${error.stack}`);
+  setTimeout(() => process.exit(1), 100);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  log(`CRITICAL: Unhandled Rejection at: ${promise} reason: ${reason}`);
+});
+
+log('Native host starting sequence...');
 
 // ============================================================================
 // Native Messaging Protocol (Chrome Extension <-> Native Host)
@@ -47,14 +61,15 @@ log('Native host starting...');
 function sendToExtension(message) {
   try {
     const json = JSON.stringify(message);
-    const buffer = Buffer.from(json, 'utf8');
-    const header = Buffer.alloc(4);
-    header.writeUInt32LE(buffer.length, 0);
+    const bodyBuffer = Buffer.from(json, 'utf8');
+    const headerBuffer = Buffer.alloc(4);
+    headerBuffer.writeUInt32LE(bodyBuffer.length, 0);
     
-    process.stdout.write(header);
-    process.stdout.write(buffer);
+    // Atomic write to prevent protocol corruption
+    const fullBuffer = Buffer.concat([headerBuffer, bodyBuffer]);
+    process.stdout.write(fullBuffer);
     
-    log(`Sent to extension: ${json.substring(0, 200)}...`);
+    log(`Sent to extension: ${json.substring(0, 100)}... (${bodyBuffer.length} bytes)`);
   } catch (error) {
     log(`Error sending to extension: ${error.message}`);
   }
@@ -65,45 +80,39 @@ function sendToExtension(message) {
  * Native messaging uses length-prefixed JSON
  */
 function setupStdinReader() {
-  let pendingHeader = null;
-  let pendingLength = 0;
   let buffer = Buffer.alloc(0);
+  let pendingLength = 0;
 
   process.stdin.on('readable', () => {
     let chunk;
     while ((chunk = process.stdin.read()) !== null) {
       buffer = Buffer.concat([buffer, chunk]);
-      processBuffer();
+      
+      while (true) {
+        if (pendingLength === 0) {
+          if (buffer.length < 4) break;
+          pendingLength = buffer.readUInt32LE(0);
+          buffer = buffer.slice(4);
+        }
+
+        if (buffer.length < pendingLength) break;
+
+        const messageBuffer = buffer.slice(0, pendingLength);
+        buffer = buffer.slice(pendingLength);
+        const currentLength = pendingLength;
+        pendingLength = 0;
+
+        try {
+          const jsonString = messageBuffer.toString('utf8');
+          const message = JSON.parse(jsonString);
+          log(`Received from extension: ${jsonString.substring(0, 100)}... (${currentLength} bytes)`);
+          handleExtensionMessage(message);
+        } catch (error) {
+          log(`Error parsing message from extension: ${error.message}`);
+        }
+      }
     }
   });
-
-  function processBuffer() {
-    while (true) {
-      // Need to read header first
-      if (pendingLength === 0) {
-        if (buffer.length < 4) return; // Wait for more data
-        
-        pendingLength = buffer.readUInt32LE(0);
-        buffer = buffer.slice(4);
-        log(`Reading message of length: ${pendingLength}`);
-      }
-
-      // Now read the message body
-      if (buffer.length < pendingLength) return; // Wait for more data
-
-      const messageBuffer = buffer.slice(0, pendingLength);
-      buffer = buffer.slice(pendingLength);
-      pendingLength = 0;
-
-      try {
-        const message = JSON.parse(messageBuffer.toString('utf8'));
-        log(`Received from extension: ${JSON.stringify(message).substring(0, 200)}...`);
-        handleExtensionMessage(message);
-      } catch (error) {
-        log(`Error parsing message from extension: ${error.message}`);
-      }
-    }
-  }
 
   process.stdin.on('end', () => {
     log('stdin closed - extension disconnected');
@@ -118,91 +127,88 @@ function setupStdinReader() {
 
 
 // ============================================================================
-// WebSocket Connection (Native Host <-> MCP Server)
+// WebSocket Server (Native Host/Server <-> MCP Server/Client)
 // ============================================================================
 
+let wss = null;
+let activeClient = null;
+
 /**
- * Connect to MCP server via WebSocket
+ * Start WebSocket server that MCP server connects to
  */
-function connectToMCPServer() {
+function startWSServer() {
   if (isShuttingDown) return;
   
-  log(`Connecting to MCP server at ${MCP_SERVER_URL}...`);
+  log(`Starting WebSocket server on port 9224...`);
   
   try {
-    ws = new WebSocket(MCP_SERVER_URL);
+    // Large payload limit for complex layout diagnostics
+    wss = new WebSocket.Server({ 
+      port: 9224, 
+      maxPayload: 256 * 1024 * 1024 
+    });
     
-    ws.on('open', () => {
-      log('Connected to MCP server');
-      // Notify extension that we're connected
+    wss.on('connection', (client) => {
+      log('MCP Server connected to bridge');
+      
+      if (activeClient) {
+        log('Closing stale MCP client connection');
+        activeClient.close();
+      }
+      
+      activeClient = client;
+      
+      client.on('message', (data) => {
+        try {
+          const message = JSON.parse(data.toString());
+          log(`Received from MCP server (type: ${message.type || 'unknown'})`);
+          sendToExtension(message);
+        } catch (error) {
+          log(`Error processing message from MCP server: ${error.message}`);
+        }
+      });
+      
+      client.on('close', () => {
+        log('MCP Server disconnected from bridge');
+        if (activeClient === client) {
+          activeClient = null;
+        }
+      });
+      
+      client.on('error', (error) => {
+        log(`MCP client WebSocket error: ${error.message}`);
+      });
+
       sendToExtension({ type: 'status', connected: true });
     });
     
-    ws.on('message', (data) => {
-      try {
-        const message = JSON.parse(data.toString());
-        log(`Received from MCP server: ${JSON.stringify(message).substring(0, 200)}...`);
-        // Forward CDP requests from MCP server to extension
-        sendToExtension(message);
-      } catch (error) {
-        log(`Error parsing message from MCP server: ${error.message}`);
+    wss.on('error', (error) => {
+      log(`WebSocket server error: ${error.message}`);
+      if (error.code === 'EADDRINUSE') {
+        log('Port 9224 already in use. Exiting.');
+        process.exit(1);
       }
     });
-    
-    ws.on('close', () => {
-      log('Disconnected from MCP server');
-      ws = null;
-      // Notify extension
-      sendToExtension({ type: 'status', connected: false });
-      // Attempt reconnection
-      scheduleReconnect();
-    });
-    
-    ws.on('error', (error) => {
-      log(`WebSocket error: ${error.message}`);
-      // Error will be followed by close event
-    });
+
+    log('WebSocket server listening on ws://localhost:9224');
     
   } catch (error) {
-    log(`Failed to create WebSocket: ${error.message}`);
-    scheduleReconnect();
+    log(`Failed to start WebSocket server: ${error.message}`);
   }
 }
 
-/**
- * Schedule reconnection attempt
- */
-function scheduleReconnect() {
-  if (isShuttingDown || reconnectTimer) return;
-  
-  log(`Scheduling reconnection in ${RECONNECT_DELAY}ms...`);
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    connectToMCPServer();
-  }, RECONNECT_DELAY);
-}
-
-/**
- * Send message to MCP server via WebSocket
- */
 function sendToMCPServer(message) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    log('Cannot send to MCP server - not connected');
-    // Send error back to extension
-    if (message.id) {
-      sendToExtension({
-        type: 'cdp_response',
-        id: message.id,
-        error: { message: 'MCP server not connected' }
-      });
-    }
+  if (!activeClient || activeClient.readyState !== WebSocket.OPEN) {
+    log(`Cannot send to MCP server - no active client (state: ${activeClient ? activeClient.readyState : 'none'})`);
     return;
   }
   
   try {
     const json = JSON.stringify(message);
-    ws.send(json);
-    log(`Sent to MCP server: ${json.substring(0, 200)}...`);
+    activeClient.send(json, (err) => {
+      if (err) log(`WebSocket send error: ${err.message}`);
+    });
+    log(`Sent to MCP server: ${json.substring(0, 100)}... (${json.length} bytes)`);
   } catch (error) {
     log(`Error sending to MCP server: ${error.message}`);
   }
@@ -232,14 +238,14 @@ function shutdown() {
   
   log('Shutting down...');
   
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
+  if (activeClient) {
+    activeClient.close();
+    activeClient = null;
   }
   
-  if (ws) {
-    ws.close();
-    ws = null;
+  if (wss) {
+    wss.close();
+    wss = null;
   }
   
   log('Native host stopped');
@@ -261,7 +267,7 @@ process.stdin.setEncoding(null);
 // Start reading from extension
 setupStdinReader();
 
-// Connect to MCP server
-connectToMCPServer();
+// Start WebSocket server (MCP server will connect to us)
+startWSServer();
 
 log('Native host ready');
