@@ -224,10 +224,16 @@ export async function reconnect(timeoutMs: number = 5000): Promise<boolean> {
 
 /**
  * Send CDP command to browser via native host
+ * Automatically reconnects if needed
  */
 export async function sendCDPCommand(method: string, params: any = {}): Promise<any> {
+  // Ensure connection before sending
   if (!isNativeHostConnected()) {
-    throw new Error('Native host not connected. Make sure the browser extension is connected.');
+    console.error(`Connection lost, attempting to reconnect for ${method}...`);
+    const connected = await reconnect(5000);
+    if (!connected) {
+      throw new Error('Native host not connected. Make sure the browser extension is connected.');
+    }
   }
 
   const id = messageIdCounter++;
@@ -256,7 +262,17 @@ export async function sendCDPCommand(method: string, params: any = {}): Promise<
     } catch (error) {
       clearTimeout(timeout);
       pendingCDPRequests.delete(id);
-      reject(new Error(`Failed to send CDP command: ${(error as Error).message}`));
+      // Try to reconnect and retry once
+      reconnect(3000).then(() => {
+        try {
+          socket!.send(JSON.stringify(message));
+          console.error(`Retried CDP command: ${method} (id: ${id})`);
+        } catch (retryError) {
+          reject(new Error(`Failed to send CDP command: ${(retryError as Error).message}`));
+        }
+      }).catch(() => {
+        reject(new Error(`Failed to send CDP command: ${(error as Error).message}`));
+      });
     }
   });
 }

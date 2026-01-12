@@ -8,7 +8,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, } from "@modelcontextprotocol/sdk/types.js";
-import { startNativeBridge, stopNativeBridge, sendCDPCommand, ensureConnected, reconnect } from "./native-bridge.js";
+import { startNativeBridge, stopNativeBridge, sendCDPCommand, ensureConnected } from "./native-bridge.js";
 import { highlightElement, getElementTree, checkAccessibility, getComputedLayout, findOverlappingElements, getEventListeners, screenshotElement, checkResponsive, findSimilarElements } from "./tools.js";
 // ============================================================================
 // Diagnostic Helper Functions
@@ -461,14 +461,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const selectorValidation = validateSelector(selector);
             if (!selectorValidation.valid) {
                 throw new Error(`Invalid CSS selector: ${selectorValidation.error}`);
-            }
-            // Auto-connect with retry logic
-            let connected = await ensureConnected(3000);
-            if (!connected) {
-                connected = await reconnect(5000);
-            }
-            if (!connected) {
-                throw new Error("Browser extension not connected. Please click 'Connect to Tab' in the extension popup.");
             }
             console.error(`🔍 Diagnosing: ${selector}`);
             // 1. Get document root

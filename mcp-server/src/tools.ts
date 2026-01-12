@@ -16,33 +16,6 @@
 import { sendCDPCommand, isNativeHostConnected, ensureConnected, reconnect } from "./native-bridge.js";
 
 // ============================================================================
-// Connection Helper with Retry Logic
-// ============================================================================
-
-/**
- * Ensure connection with automatic reconnection on failure
- * Tries to connect, and if that fails, attempts to reconnect
- */
-async function ensureConnectionWithRetry(maxRetries: number = 2): Promise<void> {
-  let connected = isNativeHostConnected();
-  
-  if (!connected) {
-    // Try to ensure connection first
-    connected = await ensureConnected(3000);
-  }
-  
-  if (!connected && maxRetries > 0) {
-    // Try to reconnect
-    console.error('Connection lost, attempting to reconnect...');
-    connected = await reconnect(5000);
-  }
-  
-  if (!connected) {
-    throw new Error('Browser extension not connected. Please click "Connect to Tab" in the extension popup.');
-  }
-}
-
-// ============================================================================
 // 1. Highlight Element
 // ============================================================================
 
@@ -51,11 +24,9 @@ export async function highlightElement(
   color: string = "red",
   duration: number = 3000
 ): Promise<any> {
-  await ensureConnectionWithRetry();
-  
   const nodeId = await getNodeId(selector);
   
-  // Highlight via CDP
+  // Highlight via CDP (sendCDPCommand handles reconnection)
   await sendCDPCommand("DOM.highlightNode", {
     nodeId,
     highlightConfig: {
@@ -94,8 +65,6 @@ export async function getElementTree(
   selector: string,
   depth: number = 3
 ): Promise<any> {
-  await ensureConnectionWithRetry();
-  
   const nodeId = await getNodeId(selector);
   
   // Get parent chain
@@ -193,8 +162,6 @@ async function getSiblings(nodeId: number): Promise<any[]> {
 // ============================================================================
 
 export async function checkAccessibility(selector: string): Promise<any> {
-  await ensureConnectionWithRetry();
-  
   const nodeId = await getNodeId(selector);
   const node = await sendCDPCommand("DOM.describeNode", { nodeId });
   const styles = await sendCDPCommand("CSS.getComputedStyleForNode", { nodeId });
@@ -262,8 +229,6 @@ export async function checkAccessibility(selector: string): Promise<any> {
 // ============================================================================
 
 export async function getComputedLayout(selector: string): Promise<any> {
-  await ensureConnectionWithRetry();
-  
   const nodeId = await getNodeId(selector);
   const boxModel = await sendCDPCommand("DOM.getBoxModel", { nodeId });
   const styles = await sendCDPCommand("CSS.getComputedStyleForNode", { nodeId });
@@ -321,8 +286,6 @@ export async function getComputedLayout(selector: string): Promise<any> {
 // ============================================================================
 
 export async function findOverlappingElements(selector: string): Promise<any> {
-  await ensureConnectionWithRetry();
-  
   const nodeId = await getNodeId(selector);
   const boxModel = await sendCDPCommand("DOM.getBoxModel", { nodeId });
   const bounds = boxModel.model;
@@ -397,8 +360,6 @@ function checkOverlap(bounds1: any, bounds2: any): boolean {
 // ============================================================================
 
 export async function getEventListeners(selector: string): Promise<any> {
-  await ensureConnectionWithRetry();
-  
   const nodeId = await getNodeId(selector);
   
   try {
@@ -430,8 +391,6 @@ export async function getEventListeners(selector: string): Promise<any> {
 // ============================================================================
 
 export async function screenshotElement(selector: string): Promise<any> {
-  await ensureConnectionWithRetry();
-  
   const nodeId = await getNodeId(selector);
   const boxModel = await sendCDPCommand("DOM.getBoxModel", { nodeId });
   
@@ -479,8 +438,6 @@ export async function checkResponsive(
   selector: string,
   breakpoints: number[] = [320, 768, 1024, 1920]
 ): Promise<any> {
-  await ensureConnectionWithRetry();
-  
   const results = [];
   
   for (const width of breakpoints) {
@@ -546,8 +503,6 @@ export async function checkResponsive(
 // ============================================================================
 
 export async function findSimilarElements(issueType: string): Promise<any> {
-  await ensureConnectionWithRetry();
-  
   const doc = await sendCDPCommand("DOM.getDocument", { depth: -1 });
   const allElements = await getAllElements(doc.root.nodeId);
   

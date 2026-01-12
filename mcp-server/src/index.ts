@@ -566,15 +566,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         throw new Error(`Invalid CSS selector: ${selectorValidation.error}`);
       }
 
-      // Auto-connect with retry logic
-      let connected = await ensureConnected(3000);
-      if (!connected) {
-        connected = await reconnect(5000);
-      }
-      if (!connected) {
-        throw new Error("Browser extension not connected. Please click 'Connect to Tab' in the extension popup.");
-      }
-
       console.error(`🔍 Diagnosing: ${selector}`);
 
       // 1. Get document root
