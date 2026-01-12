@@ -13,6 +13,17 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { startNativeBridge, stopNativeBridge, sendCDPCommand, isNativeHostConnected, ensureConnected } from "./native-bridge.js";
+import {
+  highlightElement,
+  getElementTree,
+  checkAccessibility,
+  getComputedLayout,
+  findOverlappingElements,
+  getEventListeners,
+  screenshotElement,
+  checkResponsive,
+  findSimilarElements
+} from "./tools.js";
 
 // ============================================================================
 // Layout Diagnostic Types
@@ -403,6 +414,116 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         },
       },
+      {
+        name: "highlight_element",
+        description: "Visually highlight an element in the browser with colored overlays.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            selector: { type: "string", description: "CSS selector to highlight" },
+            color: { type: "string", description: "Color name (default: red)" },
+            duration: { type: "number", description: "Duration in ms (default: 3000)" },
+          },
+          required: ["selector"],
+        },
+      },
+      {
+        name: "get_element_tree",
+        description: "Get DOM tree structure around an element (parents, siblings, children).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            selector: { type: "string", description: "CSS selector" },
+            depth: { type: "number", description: "Tree depth (default: 3)" },
+          },
+          required: ["selector"],
+        },
+      },
+      {
+        name: "check_accessibility",
+        description: "Audit element for accessibility issues (ARIA, contrast, focus).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            selector: { type: "string", description: "CSS selector" },
+          },
+          required: ["selector"],
+        },
+      },
+      {
+        name: "get_computed_layout",
+        description: "Get detailed layout info (flexbox, grid, margins, padding breakdown).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            selector: { type: "string", description: "CSS selector" },
+          },
+          required: ["selector"],
+        },
+      },
+      {
+        name: "find_overlapping_elements",
+        description: "Find all elements overlapping a given element.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            selector: { type: "string", description: "CSS selector" },
+          },
+          required: ["selector"],
+        },
+      },
+      {
+        name: "get_event_listeners",
+        description: "List all event listeners attached to an element.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            selector: { type: "string", description: "CSS selector" },
+          },
+          required: ["selector"],
+        },
+      },
+      {
+        name: "screenshot_element",
+        description: "Capture screenshot of specific element.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            selector: { type: "string", description: "CSS selector" },
+          },
+          required: ["selector"],
+        },
+      },
+      {
+        name: "check_responsive",
+        description: "Test element at different viewport sizes.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            selector: { type: "string", description: "CSS selector" },
+            breakpoints: {
+              type: "array",
+              items: { type: "number" },
+              description: "Viewport widths to test (default: [320, 768, 1024, 1920])",
+            },
+          },
+          required: ["selector"],
+        },
+      },
+      {
+        name: "find_similar_elements",
+        description: "Find other elements with similar layout issues.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            issueType: {
+              type: "string",
+              description: "Issue type to search for (e.g., 'offscreen-right', 'hidden-display')",
+            },
+          },
+          required: ["issueType"],
+        },
+      },
     ],
   };
 });
@@ -580,6 +701,101 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           },
         ],
       };
+    }
+
+    // New tools
+    if (name === "highlight_element") {
+      const selector = args?.selector as string;
+      const color = args?.color as string || "red";
+      const duration = args?.duration as number || 3000;
+      
+      if (!selector) throw new Error("selector is required");
+      await ensureConnected(5000);
+      
+      const result = await highlightElement(selector, color, duration);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    if (name === "get_element_tree") {
+      const selector = args?.selector as string;
+      const depth = args?.depth as number || 3;
+      
+      if (!selector) throw new Error("selector is required");
+      await ensureConnected(5000);
+      
+      const result = await getElementTree(selector, depth);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    if (name === "check_accessibility") {
+      const selector = args?.selector as string;
+      
+      if (!selector) throw new Error("selector is required");
+      await ensureConnected(5000);
+      
+      const result = await checkAccessibility(selector);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    if (name === "get_computed_layout") {
+      const selector = args?.selector as string;
+      
+      if (!selector) throw new Error("selector is required");
+      await ensureConnected(5000);
+      
+      const result = await getComputedLayout(selector);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    if (name === "find_overlapping_elements") {
+      const selector = args?.selector as string;
+      
+      if (!selector) throw new Error("selector is required");
+      await ensureConnected(5000);
+      
+      const result = await findOverlappingElements(selector);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    if (name === "get_event_listeners") {
+      const selector = args?.selector as string;
+      
+      if (!selector) throw new Error("selector is required");
+      await ensureConnected(5000);
+      
+      const result = await getEventListeners(selector);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    if (name === "screenshot_element") {
+      const selector = args?.selector as string;
+      
+      if (!selector) throw new Error("selector is required");
+      await ensureConnected(5000);
+      
+      const result = await screenshotElement(selector);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    if (name === "check_responsive") {
+      const selector = args?.selector as string;
+      const breakpoints = args?.breakpoints as number[] || [320, 768, 1024, 1920];
+      
+      if (!selector) throw new Error("selector is required");
+      await ensureConnected(5000);
+      
+      const result = await checkResponsive(selector, breakpoints);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    if (name === "find_similar_elements") {
+      const issueType = args?.issueType as string;
+      
+      if (!issueType) throw new Error("issueType is required");
+      await ensureConnected(5000);
+      
+      const result = await findSimilarElements(issueType);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
 
     throw new Error(`Unknown tool: ${name}`);
