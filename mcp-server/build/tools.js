@@ -12,11 +12,34 @@
  * - check_responsive
  * - find_similar_elements
  */
-import { sendCDPCommand } from "./native-bridge.js";
+import { sendCDPCommand, isNativeHostConnected, ensureConnected, reconnect } from "./native-bridge.js";
+// ============================================================================
+// Connection Helper with Retry Logic
+// ============================================================================
+/**
+ * Ensure connection with automatic reconnection on failure
+ * Tries to connect, and if that fails, attempts to reconnect
+ */
+async function ensureConnectionWithRetry(maxRetries = 2) {
+    let connected = isNativeHostConnected();
+    if (!connected) {
+        // Try to ensure connection first
+        connected = await ensureConnected(3000);
+    }
+    if (!connected && maxRetries > 0) {
+        // Try to reconnect
+        console.error('Connection lost, attempting to reconnect...');
+        connected = await reconnect(5000);
+    }
+    if (!connected) {
+        throw new Error('Browser extension not connected. Please click "Connect to Tab" in the extension popup.');
+    }
+}
 // ============================================================================
 // 1. Highlight Element
 // ============================================================================
 export async function highlightElement(selector, color = "red", duration = 3000) {
+    await ensureConnectionWithRetry();
     const nodeId = await getNodeId(selector);
     // Highlight via CDP
     await sendCDPCommand("DOM.highlightNode", {
@@ -51,6 +74,7 @@ export async function highlightElement(selector, color = "red", duration = 3000)
 // 2. Get Element Tree
 // ============================================================================
 export async function getElementTree(selector, depth = 3) {
+    await ensureConnectionWithRetry();
     const nodeId = await getNodeId(selector);
     // Get parent chain
     const parents = await getParentChain(nodeId, depth);
@@ -137,6 +161,7 @@ async function getSiblings(nodeId) {
 // 3. Check Accessibility
 // ============================================================================
 export async function checkAccessibility(selector) {
+    await ensureConnectionWithRetry();
     const nodeId = await getNodeId(selector);
     const node = await sendCDPCommand("DOM.describeNode", { nodeId });
     const styles = await sendCDPCommand("CSS.getComputedStyleForNode", { nodeId });
@@ -195,6 +220,7 @@ export async function checkAccessibility(selector) {
 // 4. Get Computed Layout
 // ============================================================================
 export async function getComputedLayout(selector) {
+    await ensureConnectionWithRetry();
     const nodeId = await getNodeId(selector);
     const boxModel = await sendCDPCommand("DOM.getBoxModel", { nodeId });
     const styles = await sendCDPCommand("CSS.getComputedStyleForNode", { nodeId });
@@ -247,6 +273,7 @@ export async function getComputedLayout(selector) {
 // 5. Find Overlapping Elements
 // ============================================================================
 export async function findOverlappingElements(selector) {
+    await ensureConnectionWithRetry();
     const nodeId = await getNodeId(selector);
     const boxModel = await sendCDPCommand("DOM.getBoxModel", { nodeId });
     const bounds = boxModel.model;
@@ -312,6 +339,7 @@ function checkOverlap(bounds1, bounds2) {
 // 6. Get Event Listeners
 // ============================================================================
 export async function getEventListeners(selector) {
+    await ensureConnectionWithRetry();
     const nodeId = await getNodeId(selector);
     try {
         const listeners = await sendCDPCommand("DOMDebugger.getEventListeners", { objectId: nodeId.toString() });
@@ -340,6 +368,7 @@ export async function getEventListeners(selector) {
 // 7. Screenshot Element
 // ============================================================================
 export async function screenshotElement(selector) {
+    await ensureConnectionWithRetry();
     const nodeId = await getNodeId(selector);
     const boxModel = await sendCDPCommand("DOM.getBoxModel", { nodeId });
     const bounds = boxModel.model;
@@ -380,6 +409,7 @@ export async function screenshotElement(selector) {
 // 8. Check Responsive
 // ============================================================================
 export async function checkResponsive(selector, breakpoints = [320, 768, 1024, 1920]) {
+    await ensureConnectionWithRetry();
     const results = [];
     for (const width of breakpoints) {
         try {
@@ -437,6 +467,7 @@ export async function checkResponsive(selector, breakpoints = [320, 768, 1024, 1
 // 9. Find Similar Elements
 // ============================================================================
 export async function findSimilarElements(issueType) {
+    await ensureConnectionWithRetry();
     const doc = await sendCDPCommand("DOM.getDocument", { depth: -1 });
     const allElements = await getAllElements(doc.root.nodeId);
     const similar = [];

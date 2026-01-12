@@ -189,6 +189,40 @@ export async function ensureConnected(timeoutMs: number = 5000): Promise<boolean
 }
 
 /**
+ * Reconnect to native host (for tools that detect disconnection)
+ * Useful when extension reconnects after being idle
+ */
+export async function reconnect(timeoutMs: number = 5000): Promise<boolean> {
+  console.error('🔄 Attempting to reconnect to native host...');
+  
+  // Close existing connection if any
+  if (socket) {
+    socket.removeAllListeners();
+    socket.close();
+    socket = null;
+  }
+  
+  isConnected = false;
+  reconnectAttempts = 0;
+  
+  // Trigger immediate connection attempt
+  scheduleConnect(true);
+  
+  // Wait for connection with timeout
+  const startTime = Date.now();
+  while (Date.now() - startTime < timeoutMs) {
+    if (isNativeHostConnected()) {
+      console.error('✅ Reconnected to native host');
+      return true;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  
+  console.error('❌ Failed to reconnect to native host');
+  return isNativeHostConnected();
+}
+
+/**
  * Send CDP command to browser via native host
  */
 export async function sendCDPCommand(method: string, params: any = {}): Promise<any> {
