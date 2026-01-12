@@ -108,6 +108,11 @@ function disconnectNativeHost() {
  * Send message to native host
  */
 function sendToNativeHost(message) {
+  // Auto-reconnect if not connected
+  if (!nativePort || !nativeHostConnected) {
+    connectNativeHost();
+  }
+  
   if (!nativePort) {
     console.error('Cannot send to native host - not connected');
     return false;

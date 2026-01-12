@@ -153,8 +153,17 @@ function startWSServer() {
     wss.on('connection', (client) => {
       log('MCP Server connected to bridge');
       
+      // Don't close the previous connection - reuse it if still valid
+      // This allows multiple MCP server instances to share the same native messaging connection
+      if (activeClient && activeClient.readyState === WebSocket.OPEN) {
+        log('Reusing existing MCP client connection');
+        client.close();
+        return;
+      }
+      
+      // Only replace if the old one is dead
       if (activeClient) {
-        log('Closing stale MCP client connection');
+        log('Closing dead MCP client connection');
         activeClient.close();
       }
       
