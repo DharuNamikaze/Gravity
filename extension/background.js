@@ -247,7 +247,7 @@ async function attachDebugger(tabId) {
  * Enable required CDP domains
  */
 async function enableCDPDomains(tabId) {
-  const domains = ['DOM', 'CSS', 'Page'];
+  const domains = ['DOM', 'CSS', 'Page', 'Overlay'];
   const enabledDomains = [];
   
   try {
