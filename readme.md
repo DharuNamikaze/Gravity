@@ -1,313 +1,258 @@
-   # DevTools Bridge MCP Server
-
-   An MCP (Model Context Protocol) server that enables AI assistants like Kiro to diagnose CSS layout issues in real browser tabs using Chrome DevTools Protocol.
-
-   ## Project Goal
-
-   **Enable AI assistants to debug visual/layout issues in web pages by directly inspecting live DOM elements in the browser.**
-
-   When a developer says "my modal is not showing" or "this element is off-screen", the AI can:
-   1. Connect to the browser via this MCP server
-   2. Query the actual DOM element using CSS selectors
-   3. Get real computed styles, positions, and viewport information
-   4. Diagnose issues (off-screen, hidden, z-index problems, etc.)
-   5. Provide actionable fix suggestions
-
-   ## Architecture
-
-   ```
-   ┌─────────────┐     ┌─────────────┐     ┌──────────────┐     ┌─────────────┐
-   │   Kiro/AI   │────▶│ MCP Server  │────▶│ Native Host  │────▶│  Chrome     │
-   │   Client    │ MCP │  (Client)   │ WS  │   (Server)   │ NM  │  Extension  │
-   └─────────────┘     └─────────────┘     └──────────────┘     └─────────────┘
-         │                  │                    │                    │
-         │ stdio            │ ws://localhost     │ Native Messaging   │ chrome.debugger
-         │ (JSON-RPC)       │ :9224              │ (length-prefixed)  │ API
-         │                  │                    │                    │
-         ▼                  ▼                    ▼                    ▼
-      Tool calls        WebSocket client     WebSocket server     CDP commands
-      from AI           (reconnects on       Persistent bridge    to inspect
-                        restart)             process              live DOM
-   ```
-
-   ### Why This Architecture?
-
-   Chrome extensions cannot directly communicate with external processes. The bridge is necessary:
-
-   1. **MCP Server** - Speaks MCP protocol to Kiro, runs WebSocket server for native host
-   2. **Native Host** - Chrome's Native Messaging allows extensions to talk to local executables
-   3. **Extension** - Has privileged access to `chrome.debugger` API for CDP commands
-
-   ## Components
-
-   ### 1. MCP Server (`mcp-server/`)
-   - TypeScript MCP server using `@modelcontextprotocol/sdk`
-   - Exposes two tools: `connect_browser` and `diagnose_layout`
-   - Runs WebSocket server on port 9224
-   - Sends CDP commands through native host → extension → browser
-
-   ### 2. Native Messaging Host (`native-host/`)
-   - Node.js process spawned by Chrome when extension connects
-   - Bridges stdio (Chrome Native Messaging) ↔ WebSocket (MCP server)
-   - Handles message framing (4-byte length prefix for Native Messaging)
-
-   ### 3. Chrome Extension (`extension/`)
-   - Manifest V3 service worker extension
-   - Attaches Chrome Debugger API to target tab
-   - Enables DOM, CSS, Page CDP domains
-   - Executes CDP commands and returns results
-
-   ## MCP Tools
-
-   ### `connect_browser`
-   Check if the browser extension is connected and ready.
-
-   ```json
-   // Input
-   { "port": 9224 }
-
-   // Output
-   {
-   "status": "connected",
-   "message": "Browser extension is connected and ready"
-   }
-   ```
-
-   ### `diagnose_layout`
-   Analyze a DOM element for layout issues.
-
-   ```json
-   // Input
-   { "selector": "#modal" }
-
-   // Output
-   {
-   "element": "#modal",
-   "position": { "left": 100, "top": 50, "width": 400, "height": 300 },
-   "viewport": { "width": 1920, "height": 1080 },
-   "computedStyles": {
-      "display": "block",
-      "position": "fixed",
-      "zIndex": "1000",
-      "visibility": "visible"
-   },
-   "issues": [
-      {
-         "type": "offscreen-right",
-         "severity": "high",
-         "message": "Element extends 200px beyond right edge of viewport",
-         "suggestion": "Add max-width: 100% or use width: fit-content"
-      }
-   ]
-   }
-   ```
-
-   ### Detected Issues
-
-   | Issue Type | Severity | Description |
-   |------------|----------|-------------|
-   | `offscreen-right/left/top/bottom` | high | Element extends beyond viewport |
-   | `completely-offscreen` | high | Element entirely outside viewport |
-   | `hidden-display` | high | `display: none` |
-   | `hidden-visibility` | high | `visibility: hidden` |
-   | `hidden-opacity` | high | `opacity: 0` |
-   | `zero-dimensions` | medium | Width and height are 0 |
-   | `modal-no-zindex` | medium | Positioned element without z-index |
-   | `overflow-hidden` | low | May clip child content |
-
-   ---
-
-   ## Solved: MCP Server Process Lifecycle
-
-   **Status:** ✅ RESOLVED via Inverted Connection Logic
-
-   Previously, Kiro's tendency to restart MCP processes would kill the WebSocket server. By moving the server role to the **Native Host**, we've decoupled the ephemeral tools from the persistent browser connection.
-
-   ---
-
-   ## Known Issues & Challenges
-
-   ### 🟡 Medium: Native Host Spawning Delay
-
-   **Problem:** Chrome spawns a new native host process each time the extension connects. There's a ~500ms delay before the WebSocket connection is established.
-
-   **Mitigation:** Native host auto-reconnects with 1-second retry interval.
-
-   ### 🟡 Medium: Extension Service Worker Lifecycle
-
-   **Problem:** Manifest V3 service workers can be terminated by Chrome when idle, which disconnects the native messaging port.
-
-   **Mitigation:** The extension reconnects native host when debugger is attached.
-
-   ### 🟢 Low: Debugger Attachment UX
-
-   **Problem:** User must manually click "Connect to Tab" in extension popup before tools work.
-
-   **Potential Solution:** Auto-attach on first `diagnose_layout` call, or provide better error messages.
-
-   ---
-
-   ## Setup Instructions
-
-   ### 1. Install Dependencies
-
-   ```bash
-   # MCP Server
-   cd mcp-server
-   npm install
-   npm run build
-
-   # Native Host  
-   cd native-host
-   npm install
-   ```
-
-   ### 2. Register Native Messaging Host
-
-   **Windows (PowerShell as Admin):**
-   ```powershell
-   # Edit native-host/com.devtools.bridge.json - update "path" to absolute path
-   # Then register:
-   reg add "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.devtools.bridge" /ve /t REG_SZ /d "D:\path\to\native-host\com.devtools.bridge.json" /f
-   ```
-
-   **macOS:**
-   ```bash
-   mkdir -p ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/
-   cp native-host/com.devtools.bridge.json ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/
-   # Edit the copied file to update "path" to absolute path
-   ```
-
-   **Linux:**
-   ```bash
-   mkdir -p ~/.config/google-chrome/NativeMessagingHosts/
-   cp native-host/com.devtools.bridge.json ~/.config/google-chrome/NativeMessagingHosts/
-   # Edit the copied file to update "path" to absolute path
-   ```
-
-   ### 3. Load Chrome Extension
-
-   1. Open `chrome://extensions`
-   2. Enable "Developer mode" (top right)
-   3. Click "Load unpacked"
-   4. Select the `extension/` folder
-   5. Note the extension ID (needed for native host manifest)
-
-   ### 4. Update Native Host Manifest
-
-   Edit `native-host/com.devtools.bridge.json`:
-   ```json
-   {
-   "name": "com.devtools.bridge",
-   "description": "DevTools Bridge Native Messaging Host",
-   "path": "D:\\absolute\\path\\to\\native-host\\devtools-bridge-host.bat",
-   "type": "stdio",
-   "allowed_origins": [
-      "chrome-extension://YOUR_EXTENSION_ID/"
-   ]
-   }
-   ```
-
-   ### 5. Configure Kiro MCP
-
-   Add to `.kiro/settings/mcp.json`:
-   ```json
-   {
-   "mcpServers": {
-      "devtools-bridge": {
-         "command": "node",
-         "args": ["D:\\absolute\\path\\to\\mcp-server\\build\\index.js"],
-         "disabled": false
-      }
-   }
-   }
-   ```
-
-   ### 6. Restart Kiro
-
-   Restart Kiro to load the MCP server configuration.
-
-   ---
-
-   ## Usage
-
-   1. Open a webpage in Chrome
-   2. Click the DevTools Bridge extension icon in toolbar
-   3. Click "Connect to Tab" - status should turn green
-   4. In Kiro, use the tools:
-      - "Check browser connection" → `connect_browser`
-      - "Diagnose the #modal element" → `diagnose_layout`
-
-   ---
-
-   ## Debugging
-
-   ### Native Host Logs
-
-   ```powershell
-   # Windows
-   type "$env:TEMP\devtools-bridge-host.log" | Select-Object -Last 30
-
-   # macOS/Linux
-   tail -30 /tmp/devtools-bridge-host.log
-   ```
-
-   ### Extension Logs
-
-   1. Go to `chrome://extensions`
-   2. Find "DevTools Bridge"
-   3. Click "service worker" link
-   4. Check Console tab for logs
-
-   ### MCP Server
-
-   The MCP server logs to stderr, which Kiro captures. Check Kiro's output panel for MCP server logs.
-
-   ### Check WebSocket Connection
-
-   ```powershell
-   # See if port 9224 is listening
-   netstat -ano | findstr "9224"
-   ```
-
-   ---
-
-   ## File Structure
-
-   ```
-   ├── extension/
-   │   ├── manifest.json      # Extension manifest (MV3)
-   │   ├── background.js      # Service worker - debugger & native messaging
-   │   ├── content.js         # Content script (fallback diagnostics)
-   │   ├── popup.html/js      # Extension popup UI
-   │   └── icon*.svg          # Extension icons
-   │
-   ├── native-host/
-   │   ├── index.js           # Native messaging host
-   │   ├── com.devtools.bridge.json  # Native host manifest
-   │   ├── devtools-bridge-host.bat  # Windows launcher
-   │   └── package.json
-   │
-   ├── mcp-server/
-   │   ├── src/
-   │   │   ├── index.ts       # MCP server & tool handlers
-   │   │   └── native-bridge.ts  # WebSocket server for native host
-   │   ├── build/             # Compiled JS
-   │   ├── package.json
-   │   └── tsconfig.json
-   │
-   ├── test.html              # Test page with various layout scenarios
-   └── readme.md              # This file
-   ```
-
-   ---
-
-   ## Future Improvements
-
-   1. **Fix MCP process lifecycle issue** - Most critical for reliability
-   2. **Add retry/wait logic** - Handle reconnection delays gracefully
-   3. **Auto-attach debugger** - Remove manual "Connect to Tab" step
-   4. **More diagnostic checks** - Flexbox issues, grid problems, animation states
-   5. **Element highlighting** - Visually highlight diagnosed elements
-   6. **Multiple element support** - Diagnose multiple selectors at once
-   7. **Screenshot capture** - Include visual evidence in diagnostics
+# DevTools Bridge - MCP Server for Browser Layout Diagnostics
+
+An MCP (Model Context Protocol) server that enables AI assistants like Kiro to diagnose CSS layout issues in real browser tabs using Chrome DevTools Protocol (CDP).
+
+## What It Does
+
+DevTools Bridge solves a critical problem: **AI assistants can't inspect live DOM elements to debug visual issues**. When a developer says "my modal is not showing" or "this element is off-screen", the AI can now:
+
+1. Connect to the browser via this MCP server
+2. Query actual DOM elements using CSS selectors
+3. Get real computed styles, positions, and viewport information
+4. Diagnose issues (off-screen, hidden, z-index problems, overflow, etc.)
+5. Provide actionable fix suggestions
+
+## Quick Start
+
+### Prerequisites
+- Node.js 16+
+- Chrome/Chromium browser
+- Kiro IDE
+
+### Installation
+
+```bash
+# 1. Build MCP Server
+cd mcp-server
+npm install
+npm run build
+
+# 2. Install Native Host
+cd ../native-host
+npm install
+```
+
+### Setup
+
+**Windows (PowerShell as Admin):**
+```powershell
+# 1. Register native host manifest
+$manifestPath = "D:\path\to\native-host\com.devtools.bridge.json"
+reg add "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.devtools.bridge" /ve /t REG_SZ /d "$manifestPath" /f
+
+# 2. Update manifest with absolute paths
+# Edit native-host/com.devtools.bridge.json:
+# - Set "path" to absolute path of devtools-bridge-host.bat
+# - Set "allowed_origins" to your extension ID
+```
+
+**macOS/Linux:**
+```bash
+# 1. Copy manifest
+mkdir -p ~/.config/google-chrome/NativeMessagingHosts/
+cp native-host/com.devtools.bridge.json ~/.config/google-chrome/NativeMessagingHosts/
+
+# 2. Update paths in the copied manifest
+```
+
+**Load Extension:**
+1. Open `chrome://extensions`
+2. Enable "Developer mode"
+3. Click "Load unpacked"
+4. Select the `extension/` folder
+5. Note the extension ID
+
+**Update Native Host Manifest:**
+Edit `native-host/com.devtools.bridge.json`:
+```json
+{
+  "name": "com.devtools.bridge",
+  "path": "D:\\absolute\\path\\to\\native-host\\devtools-bridge-host.bat",
+  "allowed_origins": ["chrome-extension://YOUR_EXTENSION_ID/"]
+}
+```
+
+**Configure Kiro:**
+Add to `.kiro/settings/mcp.json`:
+```json
+{
+  "mcpServers": {
+    "devtools-bridge": {
+      "command": "node",
+      "args": ["D:\\absolute\\path\\to\\mcp-server\\build\\index.js"],
+      "disabled": false
+    }
+  }
+}
+```
+
+Restart Kiro.
+
+## Usage
+
+1. Open a webpage in Chrome
+2. Click the DevTools Bridge extension icon
+3. Click "Connect to Tab" (status turns green)
+4. In Kiro, ask the AI to diagnose layout issues:
+   - "Check if the browser is connected"
+   - "Diagnose the #modal element"
+   - "Highlight the .button element"
+
+## Available Tools
+
+### `connect_browser`
+Check if the browser extension is connected and ready.
+
+### `diagnose_layout`
+Analyze a DOM element for layout issues. Returns:
+- Element position and dimensions
+- Viewport information
+- Computed styles
+- List of detected issues with severity and suggestions
+
+### `highlight_element`
+Visually highlight an element in the browser with a colored overlay.
+
+### `get_element_tree`
+Get DOM tree structure (parents, siblings, children) around an element.
+
+### `check_accessibility`
+Audit element for accessibility issues (ARIA, contrast, focus).
+
+### `get_computed_layout`
+Get detailed layout info (flexbox, grid, margins, padding breakdown).
+
+### `find_overlapping_elements`
+Find all elements overlapping a given element.
+
+### `get_event_listeners`
+List all event listeners attached to an element.
+
+### `screenshot_element`
+Capture screenshot of a specific element.
+
+### `check_responsive`
+Test element at different viewport sizes.
+
+## Detected Issues
+
+| Issue | Severity | Description |
+|-------|----------|-------------|
+| `offscreen-right/left/top/bottom` | high | Element extends beyond viewport |
+| `completely-offscreen` | high | Element entirely outside viewport |
+| `hidden-display` | high | `display: none` |
+| `hidden-visibility` | high | `visibility: hidden` |
+| `hidden-opacity` | high | `opacity: 0` |
+| `zero-dimensions` | medium | Width and height are 0 |
+| `modal-no-zindex` | medium | Positioned element without z-index |
+| `modal-low-zindex` | low | `z-index < 100` |
+| `overflow-hidden` | low | May clip child content |
+
+## Architecture
+
+```
+Kiro/AI ──(MCP)──▶ MCP Server ──(WebSocket)──▶ Native Host ──(Native Messaging)──▶ Chrome Extension ──(CDP)──▶ Browser
+```
+
+- **MCP Server** (TypeScript): Exposes tools, validates selectors, analyzes layout data
+- **Native Host** (Node.js): Bridges MCP server ↔ Chrome extension via WebSocket
+- **Chrome Extension** (MV3): Executes CDP commands via Chrome Debugger API
+- **Browser**: Provides DOM data via Chrome DevTools Protocol
+
+## Debugging
+
+**View native host logs:**
+```powershell
+# Windows
+type "$env:TEMP\devtools-bridge-host.log" | Select-Object -Last 50
+
+# macOS/Linux
+tail -50 /tmp/devtools-bridge-host.log
+```
+
+**View extension logs:**
+1. Go to `chrome://extensions`
+2. Click "service worker" under DevTools Bridge
+3. Check Console tab
+
+**Check WebSocket connection:**
+```powershell
+netstat -ano | findstr "9224"
+```
+
+## Project Structure
+
+```
+devtools-bridge/
+├── mcp-server/          # MCP Server (TypeScript)
+│   ├── src/
+│   │   ├── index.ts     # Main server & tool handlers
+│   │   ├── native-bridge.ts  # WebSocket client
+│   │   └── tools.ts     # Advanced diagnostic tools
+│   └── build/           # Compiled JavaScript
+│
+├── native-host/         # Native Messaging Host (Node.js)
+│   ├── index.js         # Main host process
+│   └── com.devtools.bridge.json  # Native host manifest
+│
+├── extension/           # Chrome Extension (MV3)
+│   ├── background.js    # Service worker
+│   ├── content.js       # Content script
+│   ├── popup.html/js    # Extension UI
+│   └── manifest.json    # Extension manifest
+│
+└── test.html            # Test page with layout scenarios
+```
+
+## How It Works
+
+1. **User connects tab** → Extension attaches Chrome Debugger API
+2. **Extension connects native host** → Native host starts WebSocket server
+3. **MCP server connects** → Establishes persistent connection to native host
+4. **AI requests diagnosis** → MCP server sends CDP commands through the bridge
+5. **Browser responds** → CDP data flows back through native host to MCP server
+6. **AI analyzes** → MCP server checks for layout issues and returns suggestions
+
+## Known Limitations
+
+- Manual "Connect to Tab" step required (UX friction)
+- Cannot diagnose multiple tabs simultaneously
+- No visual highlighting of diagnosed elements (yet)
+- Limited to basic layout diagnostics
+
+## Future Improvements
+
+- Auto-attach debugger on first tool call
+- Multiple tab support
+- Element highlighting with visual overlays
+- Screenshot capture with annotations
+- Flexbox/Grid-specific diagnostics
+- Animation state detection
+- Accessibility checks (WCAG compliance)
+- Performance metrics
+
+## Troubleshooting
+
+**"Native host not connected"**
+- Click "Connect to Tab" in extension popup
+- Check that extension is loaded at `chrome://extensions`
+- Verify native host manifest is registered
+
+**"Element not found"**
+- Verify CSS selector is correct
+- Check that element exists in the DOM
+- Try a simpler selector (e.g., `#modal` instead of `.modal > div`)
+
+**WebSocket connection fails**
+- Check that port 9224 is not in use: `netstat -ano | findstr "9224"`
+- Restart the extension
+- Check native host logs for errors
+
+**Extension crashes**
+- Check extension logs at `chrome://extensions` → service worker
+- Restart the extension
+- Reload the webpage
+
+## License
+
+MIT

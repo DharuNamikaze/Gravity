@@ -59,20 +59,37 @@ log('Native host starting sequence...');
  * Format: [4-byte little-endian length][JSON message]
  */
 function sendToExtension(message) {
-  try {
-    const json = JSON.stringify(message);
-    const bodyBuffer = Buffer.from(json, 'utf8');
-    const headerBuffer = Buffer.alloc(4);
-    headerBuffer.writeUInt32LE(bodyBuffer.length, 0);
-    
-    // Atomic write to prevent protocol corruption
-    const fullBuffer = Buffer.concat([headerBuffer, bodyBuffer]);
-    process.stdout.write(fullBuffer);
-    
-    log(`Sent to extension: ${json.substring(0, 100)}... (${bodyBuffer.length} bytes)`);
-  } catch (error) {
-    log(`Error sending to extension: ${error.message}`);
-  }
+  return new Promise((resolve, reject) => {
+    try {
+      const json = JSON.stringify(message);
+      const bodyBuffer = Buffer.from(json, 'utf8');
+      const headerBuffer = Buffer.alloc(4);
+      headerBuffer.writeUInt32LE(bodyBuffer.length, 0);
+      
+      // Atomic write to prevent protocol corruption
+      const fullBuffer = Buffer.concat([headerBuffer, bodyBuffer]);
+      
+      // Write with proper backpressure handling
+      const canContinue = process.stdout.write(fullBuffer, (err) => {
+        if (err) {
+          log(`Error flushing to extension: ${err.message}`);
+          reject(err);
+        } else {
+          log(`Flushed to extension: ${json.substring(0, 100)}... (${bodyBuffer.length} bytes)`);
+          resolve();
+        }
+      });
+      
+      if (!canContinue) {
+        log(`WARNING: stdout buffer full, backpressure detected for message (${bodyBuffer.length} bytes)`);
+      }
+      
+      log(`Sent to extension: ${json.substring(0, 100)}... (${bodyBuffer.length} bytes)`);
+    } catch (error) {
+      log(`Error sending to extension: ${error.message}`);
+      reject(error);
+    }
+  });
 }
 
 /**
@@ -84,20 +101,112 @@ function setupStdinReader() {
   let pendingLength = 0;
 
   process.stdin.on('readable', () => {
+    log('stdin readable event');
     let chunk;
+    let chunkCount = 0;
     while ((chunk = process.stdin.read()) !== null) {
+      chunkCount++;
       // Ensure chunk is always a Buffer
       const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, 'utf8');
       buffer = Buffer.concat([buffer, chunkBuffer]);
+      log(`Read chunk ${chunkCount}: ${chunkBuffer.length} bytes, total buffer: ${buffer.length} bytes`);
       
       while (true) {
         if (pendingLength === 0) {
-          if (buffer.length < 4) break;
+          if (buffer.length < 4) {
+            log(`Waiting for length header: have ${buffer.length} bytes, need 4`);
+            break;
+          }
+          
+          // Check if the buffer contains JSON (look for '{' anywhere in first few bytes)
+          let jsonStart = -1;
+          for (let i = 0; i < Math.min(buffer.length, 10); i++) {
+            if (buffer[i] === 0x7B) { // '{'
+              jsonStart = i;
+              break;
+            }
+          }
+          
+          if (jsonStart >= 0) {
+            log(`WARNING: Detected JSON at offset ${jsonStart}! First 50 bytes: ${buffer.slice(0, 50).toString('utf8')}`);
+            // Skip to the JSON start
+            buffer = buffer.slice(jsonStart);
+            
+            // Try to parse as JSON directly
+            try {
+              let braceCount = 0;
+              let inString = false;
+              let escaped = false;
+              for (let i = 0; i < buffer.length; i++) {
+                const byte = buffer[i];
+                if (escaped) {
+                  escaped = false;
+                  continue;
+                }
+                if (byte === 0x5C) { // backslash
+                  escaped = true;
+                  continue;
+                }
+                if (byte === 0x22) { // quote
+                  inString = !inString;
+                  continue;
+                }
+                if (!inString) {
+                  if (byte === 0x7B) braceCount++; // {
+                  if (byte === 0x7D) braceCount--; // }
+                  if (braceCount === 0 && i > 0) {
+                    // Found end of JSON
+                    const jsonBuffer = buffer.slice(0, i + 1);
+                    buffer = buffer.slice(i + 1);
+                    try {
+                      const jsonString = jsonBuffer.toString('utf8');
+                      const message = JSON.parse(jsonString);
+                      log(`Received from extension (no length prefix): ${jsonString.substring(0, 100)}... (${jsonBuffer.length} bytes)`);
+                      handleExtensionMessage(message);
+                    } catch (e) {
+                      log(`Error parsing JSON without length prefix: ${e.message}`);
+                    }
+                    pendingLength = 0;
+                    continue;
+                  }
+                }
+              }
+              // If we get here, we need more data
+              log(`Incomplete JSON, waiting for more data. Have ${buffer.length} bytes.`);
+              break;
+            } catch (e) {
+              log(`Error handling JSON without length prefix: ${e.message}`);
+            }
+            break;
+          }
+          
           pendingLength = buffer.readUInt32LE(0);
+          
+          // Sanity check: message length should be reasonable (< 100MB)
+          if (pendingLength > 100 * 1024 * 1024) {
+            log(`ERROR: Invalid message length ${pendingLength}, buffer starts with: ${buffer.slice(0, 20).toString('hex')}`);
+            log(`First 20 bytes as string: ${buffer.slice(0, 20).toString('utf8')}`);
+            // Try to recover by looking for next valid message
+            buffer = buffer.slice(1);
+            pendingLength = 0;
+            continue;
+          }
+          
           buffer = buffer.slice(4);
+          log(`Read message length: ${pendingLength} bytes`);
         }
 
-        if (buffer.length < pendingLength) break;
+        if (buffer.length < pendingLength) {
+          // Check if we're waiting for an unreasonably large message
+          if (pendingLength > 100 * 1024 * 1024) {
+            log(`ERROR: Stuck waiting for huge message (${pendingLength} bytes), resetting state`);
+            pendingLength = 0;
+            buffer = Buffer.alloc(0);
+            break;
+          }
+          log(`Waiting for message body: have ${buffer.length} bytes, need ${pendingLength}`);
+          break;
+        }
 
         const messageBuffer = buffer.slice(0, pendingLength);
         buffer = buffer.slice(pendingLength);
@@ -113,6 +222,9 @@ function setupStdinReader() {
           log(`Error parsing message from extension: ${error.message}`);
         }
       }
+    }
+    if (chunkCount === 0) {
+      log('stdin readable but no data available');
     }
   });
 
@@ -173,7 +285,9 @@ function startWSServer() {
         try {
           const message = JSON.parse(data.toString());
           log(`Received from MCP server (type: ${message.type || 'unknown'})`);
-          sendToExtension(message);
+          sendToExtension(message).catch((err) => {
+            log(`Failed to send message to extension: ${err.message}`);
+          });
         } catch (error) {
           log(`Error processing message from MCP server: ${error.message}`);
         }
@@ -190,7 +304,9 @@ function startWSServer() {
         log(`MCP client WebSocket error: ${error.message}`);
       });
 
-      sendToExtension({ type: 'status', connected: true });
+      sendToExtension({ type: 'status', connected: true }).catch((err) => {
+        log(`Failed to send status message: ${err.message}`);
+      });
     });
     
     wss.on('error', (error) => {

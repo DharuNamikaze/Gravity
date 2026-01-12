@@ -1,5 +1,5 @@
 {
-  "manifest_version": 3,
+  "manifest_version": 2,
   "name": "DevTools Bridge",
   "version": "0.1.0",
   "description": "Connects browser to MCP server for layout debugging",
@@ -16,9 +16,10 @@
     }
   ],
   "background": {
-    "service_worker": "background.js"
+    "scripts": ["background.js"],
+    "persistent": true
   },
-  "action": {
+  "browser_action": {
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icon16.svg",

@@ -8,7 +8,9 @@
         "disabled": false,
         "autoApprove": [
           "diagnose_layout",
-          "connect_browser"
+          "connect_browser",
+          "get_computed_layout",
+          "highlight_element"
         ]
       }
     }

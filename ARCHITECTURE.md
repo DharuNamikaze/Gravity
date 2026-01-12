@@ -1,8 +1,10 @@
-# DevTools Bridge - Technical Architecture
+# DevTools Bridge - Technical Architecture & Implementation
 
-## Overview
+## Executive Summary
 
-DevTools Bridge is an MCP (Model Context Protocol) server that enables AI assistants like Kiro to diagnose CSS layout issues in real browser tabs using Chrome DevTools Protocol (CDP).
+DevTools Bridge is a three-layer system that enables AI assistants to diagnose CSS layout issues in live browser tabs. It solves the fundamental problem that AI cannot inspect real DOM elements without a bridge to the browser.
+
+**Key Innovation:** Inverted connection logic - the native host runs a persistent WebSocket server, allowing the MCP server to reconnect without losing the browser connection.
 
 ## System Architecture
 

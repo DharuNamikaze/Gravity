@@ -131,7 +131,7 @@ function sendToNativeHost(message) {
 /**
  * Handle messages from native host (CDP requests from MCP server)
  */
-async function handleNativeMessage(message) {
+function handleNativeMessage(message) {
   // Handle status messages from native host
   if (message.type === 'status') {
     console.log('Native host status:', message);
@@ -142,29 +142,39 @@ async function handleNativeMessage(message) {
   if (message.type === 'cdp_request') {
     const { id, method, params } = message;
     
-    try {
-      if (!debuggerState.attached) {
-        throw new Error('Debugger not attached');
-      }
-      
-      // Execute CDP command
-      const result = await sendCDPCommand(debuggerState.tabId, method, params || {});
-      
-      // Send response back through native host
+    if (!debuggerState.attached) {
       sendToNativeHost({
         type: 'cdp_response',
         id,
-        result
+        error: { message: 'Debugger not attached' }
       });
-      
-    } catch (error) {
-      // Send error back through native host
-      sendToNativeHost({
-        type: 'cdp_response',
-        id,
-        error: { message: error.message }
-      });
+      return;
     }
+    
+    // Execute CDP command with error handling
+    sendCDPCommand(debuggerState.tabId, method, params || {})
+      .then(result => {
+        try {
+          sendToNativeHost({
+            type: 'cdp_response',
+            id,
+            result
+          });
+        } catch (error) {
+          console.error('Failed to send CDP response:', error);
+        }
+      })
+      .catch(error => {
+        try {
+          sendToNativeHost({
+            type: 'cdp_response',
+            id,
+            error: { message: error.message }
+          });
+        } catch (sendError) {
+          console.error('Failed to send CDP error response:', sendError);
+        }
+      });
   }
 }
 
@@ -175,111 +185,105 @@ async function handleNativeMessage(message) {
 /**
  * Attach debugger to current tab with enhanced error handling
  */
-async function attachDebugger(tabId) {
-  try {
-    debuggerState.lastError = null;
-    
-    // Check if tab exists and is valid
-    const tab = await chrome.tabs.get(tabId).catch(() => null);
-    if (!tab) {
-      throw new Error(`Tab ${tabId} not found or inaccessible`);
+function attachDebugger(tabId) {
+  debuggerState.lastError = null;
+  
+  // Check if tab exists and is valid
+  chrome.tabs.get(tabId, (tab) => {
+    if (chrome.runtime.lastError || !tab) {
+      const error = chrome.runtime.lastError?.message || 'Tab not found or inaccessible';
+      debuggerState.lastError = error;
+      debuggerState.attached = false;
+      debuggerState.tabId = null;
+      debuggerState.domainsEnabled = false;
+      console.error('Failed to get tab:', error);
+      return;
     }
     
     // Check if tab URL is debuggable
     if (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://') || tab.url.startsWith('moz-extension://')) {
-      throw new Error(`Cannot attach debugger to system page: ${tab.url}`);
+      const error = `Cannot attach debugger to system page: ${tab.url}`;
+      debuggerState.lastError = error;
+      console.error(error);
+      return;
     }
     
     // Detach from previous tab if attached
     if (debuggerState.attached && debuggerState.tabId && debuggerState.tabId !== tabId) {
-      await detachDebugger(debuggerState.tabId);
+      detachDebugger(debuggerState.tabId);
     }
     
     console.log(`Attempting to attach debugger to tab ${tabId} (${tab.url})`);
     
-    // Attach debugger with timeout
-    await Promise.race([
-      chrome.debugger.attach({ tabId }, '1.3'),
-      new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Debugger attachment timeout (5s)')), 5000)
-      )
-    ]);
-    
-    debuggerTabId = tabId;
-    debuggerState.attached = true;
-    debuggerState.tabId = tabId;
-    debuggerState.domainsEnabled = false;
-    debuggerState.attachmentTime = Date.now();
-    
-    console.log(`Successfully attached debugger to tab ${tabId}`);
-    
-    // Enable required CDP domains
-    await enableCDPDomains(tabId);
-    
-    // Connect to native host after debugger is attached
-    connectNativeHost();
-    
-    return { success: true, tabId, url: tab.url };
-  } catch (error) {
-    const errorMessage = error.message || 'Unknown debugger attachment error';
-    console.error('Failed to attach debugger:', errorMessage);
-    
-    debuggerState.lastError = errorMessage;
-    debuggerState.attached = false;
-    debuggerState.tabId = null;
-    debuggerState.domainsEnabled = false;
-    
-    // Clean up partial state
-    if (debuggerTabId) {
-      try {
-        await chrome.debugger.detach({ tabId: debuggerTabId });
-      } catch (detachError) {
-        console.warn('Failed to clean up debugger attachment:', detachError);
+    // Attach debugger
+    chrome.debugger.attach({ tabId }, '1.3', () => {
+      if (chrome.runtime.lastError) {
+        const error = chrome.runtime.lastError.message;
+        console.error('Failed to attach debugger:', error);
+        debuggerState.lastError = error;
+        debuggerState.attached = false;
+        debuggerState.tabId = null;
+        debuggerState.domainsEnabled = false;
+        return;
       }
-      debuggerTabId = null;
-    }
-    
-    return { success: false, error: errorMessage };
-  }
+      
+      debuggerTabId = tabId;
+      debuggerState.attached = true;
+      debuggerState.tabId = tabId;
+      debuggerState.domainsEnabled = false;
+      debuggerState.attachmentTime = Date.now();
+      
+      console.log(`Successfully attached debugger to tab ${tabId}`);
+      
+      // Enable required CDP domains
+      enableCDPDomains(tabId);
+      
+      // Connect to native host after debugger is attached
+      connectNativeHost();
+    });
+  });
 }
 
 /**
  * Enable required CDP domains
  */
-async function enableCDPDomains(tabId) {
+/**
+ * Enable required CDP domains
+ */
+function enableCDPDomains(tabId) {
   const domains = ['DOM', 'CSS', 'Page', 'Overlay'];
-  const enabledDomains = [];
+  let enabledCount = 0;
   
-  try {
-    for (const domain of domains) {
-      console.log(`Enabling ${domain} domain...`);
-      await sendCDPCommand(tabId, `${domain}.enable`);
-      enabledDomains.push(domain);
-      console.log(`Successfully enabled ${domain} domain`);
+  function enableNextDomain() {
+    if (enabledCount >= domains.length) {
+      debuggerState.domainsEnabled = true;
+      console.log('All CDP domains enabled successfully');
+      return;
     }
     
-    debuggerState.domainsEnabled = true;
-    console.log('All CDP domains enabled successfully');
+    const domain = domains[enabledCount];
+    console.log(`Enabling ${domain} domain...`);
     
-  } catch (error) {
-    // Clean up partially enabled domains
-    for (const domain of enabledDomains) {
-      try {
-        await sendCDPCommand(tabId, `${domain}.disable`);
-      } catch (cleanupError) {
-        console.warn(`Failed to disable ${domain} during cleanup:`, cleanupError);
+    chrome.debugger.sendCommand({ tabId }, `${domain}.enable`, {}, () => {
+      if (chrome.runtime.lastError) {
+        console.warn(`Failed to enable ${domain}:`, chrome.runtime.lastError.message);
+        debuggerState.domainsEnabled = false;
+        return;
       }
-    }
-    
-    debuggerState.domainsEnabled = false;
-    throw error;
+      
+      console.log(`Successfully enabled ${domain} domain`);
+      enabledCount++;
+      enableNextDomain();
+    });
   }
+  
+  enableNextDomain();
 }
 
 /**
  * Detach debugger with proper cleanup
  */
-async function detachDebugger(tabId = null) {
+function detachDebugger(tabId = null) {
   const targetTabId = tabId || debuggerState.tabId || debuggerTabId;
   
   // Disconnect native host first
@@ -287,12 +291,14 @@ async function detachDebugger(tabId = null) {
   
   if (!targetTabId) {
     console.log('No debugger to detach');
-    return { success: true };
+    return;
   }
   
-  try {
-    console.log(`Detaching debugger from tab ${targetTabId}`);
-    await chrome.debugger.detach({ tabId: targetTabId });
+  console.log(`Detaching debugger from tab ${targetTabId}`);
+  chrome.debugger.detach({ tabId: targetTabId }, () => {
+    if (chrome.runtime.lastError) {
+      console.error('Failed to detach debugger:', chrome.runtime.lastError.message);
+    }
     
     // Reset state
     debuggerTabId = null;
@@ -303,21 +309,7 @@ async function detachDebugger(tabId = null) {
     debuggerState.attachmentTime = null;
     
     console.log('Debugger detached successfully');
-    return { success: true };
-    
-  } catch (error) {
-    const errorMessage = error.message || 'Unknown detachment error';
-    console.error('Failed to detach debugger:', errorMessage);
-    
-    // Reset state even if detachment failed
-    debuggerTabId = null;
-    debuggerState.attached = false;
-    debuggerState.tabId = null;
-    debuggerState.domainsEnabled = false;
-    debuggerState.lastError = errorMessage;
-    
-    return { success: false, error: errorMessage };
-  }
+  });
 }
 
 /**
@@ -326,20 +318,42 @@ async function detachDebugger(tabId = null) {
 async function sendCDPCommand(tabId, method, params = {}) {
   return new Promise((resolve, reject) => {
     if (!debuggerState.attached || debuggerState.tabId !== tabId) {
-      reject(new Error(`Debugger not attached to tab ${tabId}`));
+      const error = `Debugger not attached to tab ${tabId}`;
+      console.error('CDP Error:', error, 'State:', debuggerState);
+      reject(new Error(error));
       return;
     }
     
+    let responded = false;
+    
+    // Use 12 second timeout (longer than MCP server's 10 second timeout)
+    // This ensures the MCP server times out first, preventing state corruption
     const timeout = setTimeout(() => {
-      reject(new Error(`CDP command ${method} timed out after 5 seconds`));
-    }, 5000);
+      responded = true;
+      const errorMsg = `CDP command ${method} timed out after 12 seconds`;
+      console.error('CDP Timeout:', errorMsg);
+      reject(new Error(errorMsg));
+    }, 12000);
+    
+    console.log(`Sending CDP command: ${method} to tab ${tabId}`);
     
     chrome.debugger.sendCommand({ tabId }, method, params, (result) => {
       clearTimeout(timeout);
       
+      // Ignore response if we already timed out
+      if (responded) {
+        console.warn(`Ignoring late response for ${method} (already timed out)`);
+        return;
+      }
+      
+      responded = true;
+      
       if (chrome.runtime.lastError) {
-        reject(new Error(`CDP command ${method} failed: ${chrome.runtime.lastError.message}`));
+        const errorMsg = `CDP command ${method} failed: ${chrome.runtime.lastError.message}`;
+        console.error('CDP Error:', errorMsg);
+        reject(new Error(errorMsg));
       } else {
+        console.log(`CDP command ${method} succeeded`);
         resolve(result);
       }
     });
@@ -368,7 +382,7 @@ function getDebuggerStatus() {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'attach') {
-    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (!tabs || tabs.length === 0) {
         sendResponse({ success: false, error: 'No active tab found' });
         return;
@@ -380,18 +394,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return;
       }
       
-      const result = await attachDebugger(tab.id);
-      sendResponse(result);
+      attachDebugger(tab.id);
+      // Send response after a short delay to allow attachment to complete
+      setTimeout(() => {
+        sendResponse({ 
+          success: debuggerState.attached, 
+          tabId: debuggerState.tabId,
+          error: debuggerState.lastError
+        });
+      }, 100);
     });
     return true;
   }
   
   if (request.action === 'detach') {
-    detachDebugger().then(result => {
-      sendResponse(result);
-    }).catch(error => {
-      sendResponse({ success: false, error: error.message });
-    });
+    detachDebugger();
+    sendResponse({ success: true });
     return true;
   }
   
@@ -450,7 +468,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 // Handle debugger detach
 chrome.debugger.onDetach.addListener((source, reason) => {
-  console.log(`Debugger detached from tab ${source.tabId}: ${reason}`);
+  console.error(`🔴 DEBUGGER DETACHED from tab ${source.tabId}: ${reason}`);
+  console.error('Debugger state at detach:', debuggerState);
   
   if (source.tabId === debuggerState.tabId) {
     debuggerState.attached = false;
