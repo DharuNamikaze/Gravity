@@ -1,0 +1,9 @@
+{
+  "name": "com.gravity",
+  "description": "Gravity Native Messaging Host - connects Chrome extension to MCP server",
+  "path": "D:\\Dharu\\MCP\\Gravity\\Gravity\\native-host\\gravity-host.bat",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://opaomanlaiendicoipmejloddhiljalg/"
+  ]
+}

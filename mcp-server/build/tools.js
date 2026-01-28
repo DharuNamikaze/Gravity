@@ -1,5 +1,5 @@
 /**
- * Additional DevTools Bridge Tools
+ * Additional Gravity Tools
  *
  * Implements advanced diagnostic and inspection tools:
  * - highlight_element

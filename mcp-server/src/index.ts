@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * DevTools Bridge MCP Server
+ * Gravity MCP Server
  * 
  * Provides layout diagnostic tools via MCP protocol.
  * Communicates with browser extension through Native Messaging + WebSocket bridge.
@@ -372,7 +372,7 @@ function checkOverflow(styleMap: Map<string, string>): DiagnosticIssue[] {
 
 const server = new Server(
   {
-    name: "devtools-bridge",
+    name: "gravity",
     version: "0.1.0",
   },
   {
@@ -819,25 +819,49 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 // ============================================================================
 
 async function main() {
+  console.error("═══════════════════════════════════════════════════════");
+  console.error("🚀 GRAVITY MCP SERVER - STARTING");
+  console.error("═══════════════════════════════════════════════════════");
+  console.error(`📅 Timestamp: ${new Date().toISOString()}`);
+  console.error(`📂 Working Directory: ${process.cwd()}`);
+  console.error(`🔧 Node Version: ${process.version}`);
+  console.error(`💻 Platform: ${process.platform}`);
+  
   // Start MCP server FIRST to establish stdio transport
+  console.error("\n[STEP 1] Initializing MCP Server Transport...");
   const transport = new StdioServerTransport();
+  console.error("✅ StdioServerTransport created");
   
   // Connect MCP server before doing anything else
+  console.error("\n[STEP 2] Connecting MCP Server to stdio...");
   await server.connect(transport);
+  console.error("✅ MCP Server connected to stdio transport");
+  console.error("   → AI clients can now send tool requests via JSON-RPC");
   
   // NOW start the WebSocket server for native host connections
+  console.error("\n[STEP 3] Starting Native Bridge (WebSocket Client)...");
+  console.error("   → Will connect to Native Host at ws://localhost:9224");
   try {
     await startNativeBridge(9224);
+    console.error("✅ Native Bridge started successfully");
   } catch (error) {
-    console.error('Failed to start native bridge:', error);
+    console.error("❌ Failed to start native bridge:", error);
     process.exit(1);
   }
   
-  console.error("🚀 DevTools Bridge MCP Server running");
+  console.error("\n═══════════════════════════════════════════════════════");
+  console.error("✅ GRAVITY MCP SERVER - READY");
+  console.error("═══════════════════════════════════════════════════════");
+  console.error("📡 Listening for MCP tool calls on stdio");
+  console.error("🔌 WebSocket client attempting connection to Native Host");
+  console.error("⏳ Waiting for Chrome Extension to connect...");
+  console.error("═══════════════════════════════════════════════════════\n");
   
   // Graceful shutdown
   const shutdown = () => {
-    console.error("🛑 Shutting down...");
+    console.error("\n═══════════════════════════════════════════════════════");
+    console.error("🛑 SHUTTING DOWN GRAVITY MCP SERVER");
+    console.error("═══════════════════════════════════════════════════════");
     stopNativeBridge();
     process.exit(0);
   };

@@ -1,6 +1,6 @@
 {
     "servers": {
-        "devtools-bridge": {
+        "gravity": {
             "type": "stdio",
             "command": "node",
             "args": [

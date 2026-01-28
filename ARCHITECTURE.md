@@ -1,8 +1,8 @@
-# DevTools Bridge - Technical Architecture & Implementation
+# Gravity - Technical Architecture & Implementation
 
 ## Executive Summary
 
-DevTools Bridge is a three-layer system that enables AI assistants to diagnose CSS layout issues in live browser tabs. It solves the fundamental problem that AI cannot inspect real DOM elements without a bridge to the browser.
+Gravity is a three-layer system that enables AI assistants to diagnose CSS layout issues in live browser tabs. It solves the fundamental problem that AI cannot inspect real DOM elements without a bridge to the browser.
 
 **Key Innovation:** Inverted connection logic - the native host runs a persistent WebSocket server, allowing the MCP server to reconnect without losing the browser connection.
 
@@ -10,7 +10,7 @@ DevTools Bridge is a three-layer system that enables AI assistants to diagnose C
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│                              DEVTOOLS BRIDGE SYSTEM                             │
+│                              GRAVITY SYSTEM                                     │
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                 │
 │  ┌──────────────┐    stdio     ┌──────────────┐    WebSocket    ┌────────────┐  │
@@ -312,7 +312,7 @@ chrome.debugger.sendCommand({ tabId }, 'DOM.getDocument', {}, (result) => {
 ## File Structure
 
 ```
-devtools-bridge/
+gravity/
 ├── mcp-server/
 │   ├── src/
 │   │   ├── index.ts          # MCP server, tool handlers, diagnostics
@@ -323,8 +323,8 @@ devtools-bridge/
 │
 ├── native-host/
 │   ├── index.js              # Native messaging host
-│   ├── com.devtools.bridge.json  # Native host manifest
-│   ├── devtools-bridge-host.bat  # Windows launcher
+│   ├── com.gravity.json      # Native host manifest
+│   ├── gravity-host.bat      # Windows launcher
 │   └── package.json
 │
 ├── extension/

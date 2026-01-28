@@ -1,10 +1,10 @@
-# DevTools Bridge - MCP Server for Browser Layout Diagnostics
+# Gravity - MCP Server for Browser Layout Diagnostics
 
 An MCP (Model Context Protocol) server that enables AI assistants like Kiro to diagnose CSS layout issues in real browser tabs using Chrome DevTools Protocol (CDP).
 
 ## What It Does
 
-DevTools Bridge solves a critical problem: **AI assistants can't inspect live DOM elements to debug visual issues**. When a developer says "my modal is not showing" or "this element is off-screen", the AI can now:
+Gravity solves a critical problem: **AI assistants can't inspect live DOM elements to debug visual issues**. When a developer says "my modal is not showing" or "this element is off-screen", the AI can now:
 
 1. Connect to the browser via this MCP server
 2. Query actual DOM elements using CSS selectors
@@ -37,12 +37,12 @@ npm install
 **Windows (PowerShell as Admin):**
 ```powershell
 # 1. Register native host manifest
-$manifestPath = "D:\path\to\native-host\com.devtools.bridge.json"
-reg add "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.devtools.bridge" /ve /t REG_SZ /d "$manifestPath" /f
+$manifestPath = "D:\path\to\native-host\com.gravity.json"
+reg add "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.gravity" /ve /t REG_SZ /d "$manifestPath" /f
 
 # 2. Update manifest with absolute paths
-# Edit native-host/com.devtools.bridge.json:
-# - Set "path" to absolute path of devtools-bridge-host.bat
+# Edit native-host/com.gravity.json:
+# - Set "path" to absolute path of gravity-host.bat
 # - Set "allowed_origins" to your extension ID
 ```
 
@@ -50,7 +50,7 @@ reg add "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.devtools.bridge" /
 ```bash
 # 1. Copy manifest
 mkdir -p ~/.config/google-chrome/NativeMessagingHosts/
-cp native-host/com.devtools.bridge.json ~/.config/google-chrome/NativeMessagingHosts/
+cp native-host/com.gravity.json ~/.config/google-chrome/NativeMessagingHosts/
 
 # 2. Update paths in the copied manifest
 ```
@@ -63,11 +63,11 @@ cp native-host/com.devtools.bridge.json ~/.config/google-chrome/NativeMessagingH
 5. Note the extension ID
 
 **Update Native Host Manifest:**
-Edit `native-host/com.devtools.bridge.json`:
+Edit `native-host/com.gravity.json`:
 ```json
 {
-  "name": "com.devtools.bridge",
-  "path": "D:\\absolute\\path\\to\\native-host\\devtools-bridge-host.bat",
+  "name": "com.gravity",
+  "path": "D:\\absolute\\path\\to\\native-host\\gravity-host.bat",
   "allowed_origins": ["chrome-extension://YOUR_EXTENSION_ID/"]
 }
 ```
@@ -77,7 +77,7 @@ Add to `.kiro/settings/mcp.json`:
 ```json
 {
   "mcpServers": {
-    "devtools-bridge": {
+    "gravity": {
       "command": "node",
       "args": ["D:\\absolute\\path\\to\\mcp-server\\build\\index.js"],
       "disabled": false
@@ -91,7 +91,7 @@ Restart Kiro.
 ## Usage
 
 1. Open a webpage in Chrome
-2. Click the DevTools Bridge extension icon
+2. Click the Gravity extension icon
 3. Click "Connect to Tab" (status turns green)
 4. In Kiro, ask the AI to diagnose layout issues:
    - "Check if the browser is connected"
@@ -164,15 +164,15 @@ Kiro/AI ──(MCP)──▶ MCP Server ──(WebSocket)──▶ Native Host �
 **View native host logs:**
 ```powershell
 # Windows
-type "$env:TEMP\devtools-bridge-host.log" | Select-Object -Last 50
+type "$env:TEMP\gravity-host.log" | Select-Object -Last 50
 
 # macOS/Linux
-tail -50 /tmp/devtools-bridge-host.log
+tail -50 /tmp/gravity-host.log
 ```
 
 **View extension logs:**
 1. Go to `chrome://extensions`
-2. Click "service worker" under DevTools Bridge
+2. Click "background page" under Gravity
 3. Check Console tab
 
 **Check WebSocket connection:**
@@ -183,7 +183,7 @@ netstat -ano | findstr "9224"
 ## Project Structure
 
 ```
-devtools-bridge/
+gravity/
 ├── mcp-server/          # MCP Server (TypeScript)
 │   ├── src/
 │   │   ├── index.ts     # Main server & tool handlers
@@ -193,7 +193,7 @@ devtools-bridge/
 │
 ├── native-host/         # Native Messaging Host (Node.js)
 │   ├── index.js         # Main host process
-│   └── com.devtools.bridge.json  # Native host manifest
+│   └── com.gravity.json  # Native host manifest
 │
 ├── extension/           # Chrome Extension (MV3)
 │   ├── background.js    # Service worker

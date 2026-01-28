@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * DevTools Bridge Native Messaging Host
+ * Gravity Native Messaging Host
  * 
  * Bridges Chrome extension (via Native Messaging stdio) to MCP server (via WebSocket)
  * 
@@ -17,8 +17,8 @@ const path = require('path');
 const MCP_SERVER_URL = 'ws://localhost:9224';
 const RECONNECT_DELAY = 1000;
 const LOG_FILE = process.platform === 'win32' 
-  ? path.join(process.env.TEMP || 'C:\\Temp', 'devtools-bridge-host.log')
-  : '/tmp/devtools-bridge-host.log';
+  ? path.join(process.env.TEMP || 'C:\\Temp', 'gravity-host.log')
+  : '/tmp/gravity-host.log';
 
 // State
 let ws = null;
@@ -39,15 +39,27 @@ function log(message) {
 
 // Global error handlers to prevent silent exits
 process.on('uncaughtException', (error) => {
-  log(`CRITICAL: Uncaught Exception: ${error.message}\n${error.stack}`);
+  const msg = `CRITICAL: Uncaught Exception: ${error.message}\n${error.stack}`;
+  log(msg);
+  console.error(msg); // Also log to stderr for Chrome to see
   setTimeout(() => process.exit(1), 100);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  log(`CRITICAL: Unhandled Rejection at: ${promise} reason: ${reason}`);
+  const msg = `CRITICAL: Unhandled Rejection at: ${promise} reason: ${reason}`;
+  log(msg);
+  console.error(msg); // Also log to stderr for Chrome to see
 });
 
+// Log all console.error calls to file as well
+const originalConsoleError = console.error;
+console.error = function(...args) {
+  log(`[STDERR] ${args.join(' ')}`);
+  originalConsoleError.apply(console, args);
+};
+
 log('Native host starting sequence...');
+log(`TIMESTAMP: ${new Date().toISOString()} - This is a NEW instance with error logging`);
 
 // ============================================================================
 // Native Messaging Protocol (Chrome Extension <-> Native Host)
@@ -251,76 +263,107 @@ let activeClient = null;
  * Start WebSocket server that MCP server connects to
  */
 function startWSServer() {
-  if (isShuttingDown) return;
+  if (isShuttingDown) {
+    log('[WS SERVER] Cannot start - shutting down');
+    return;
+  }
   
-  log(`Starting WebSocket server on port 9224...`);
+  log('[WS SERVER] ═══════════════════════════════════════════════════');
+  log('[WS SERVER] Starting WebSocket server on port 9224...');
+  log('[WS SERVER] This server will ACCEPT connections from MCP Server');
+  log('[WS SERVER] ═══════════════════════════════════════════════════');
   
   try {
     // Large payload limit for complex layout diagnostics
+    log('[WS SERVER] Creating WebSocket.Server with config:');
+    log('[WS SERVER]   - port: 9224');
+    log('[WS SERVER]   - maxPayload: 256MB');
+    
     wss = new WebSocket.Server({ 
       port: 9224, 
       maxPayload: 256 * 1024 * 1024 
     });
     
-    wss.on('connection', (client) => {
-      log('MCP Server connected to bridge');
+    log('[WS SERVER] WebSocket.Server instance created');
+    
+    wss.on('listening', () => {
+      log('[WS SERVER] ✅✅✅ SERVER IS NOW LISTENING ON PORT 9224 ✅✅✅');
+      log('[WS SERVER] MCP Server can now connect to ws://localhost:9224');
+      log('[WS SERVER] Waiting for MCP Server to connect...');
+    });
+    
+    wss.on('connection', (client, request) => {
+      const clientAddress = request.socket.remoteAddress;
+      const clientPort = request.socket.remotePort;
+      log('[WS SERVER] ═══════════════════════════════════════════════════');
+      log('[WS SERVER] 🎉 NEW CONNECTION RECEIVED!');
+      log(`[WS SERVER] Client address: ${clientAddress}:${clientPort}`);
+      log('[WS SERVER] ═══════════════════════════════════════════════════');
       
-      // Don't close the previous connection - reuse it if still valid
-      // This allows multiple MCP server instances to share the same native messaging connection
-      if (activeClient && activeClient.readyState === WebSocket.OPEN) {
-        log('Reusing existing MCP client connection');
-        client.close();
-        return;
-      }
-      
-      // Only replace if the old one is dead
+      // Always accept new connections and close old ones
+      // This allows MCP server to reconnect after restarts
       if (activeClient) {
-        log('Closing dead MCP client connection');
-        activeClient.close();
+        const oldState = activeClient.readyState;
+        log(`[WS SERVER] Closing existing client (state: ${oldState}) to accept new connection`);
+        try {
+          activeClient.close();
+        } catch (e) {
+          log(`[WS SERVER] Error closing old client: ${e.message}`);
+        }
       }
       
       activeClient = client;
+      log('[WS SERVER] ✅ MCP Server connected and set as active client');
       
       client.on('message', (data) => {
         try {
           const message = JSON.parse(data.toString());
-          log(`Received from MCP server (type: ${message.type || 'unknown'})`);
+          log(`[WS SERVER] ⬅️  Received from MCP server (type: ${message.type || 'unknown'})`);
           sendToExtension(message).catch((err) => {
-            log(`Failed to send message to extension: ${err.message}`);
+            log(`[WS SERVER] ❌ Failed to send message to extension: ${err.message}`);
           });
         } catch (error) {
-          log(`Error processing message from MCP server: ${error.message}`);
+          log(`[WS SERVER] ❌ Error processing message from MCP server: ${error.message}`);
         }
       });
       
       client.on('close', () => {
-        log('MCP Server disconnected from bridge');
+        log('[WS SERVER] ❌ MCP Server disconnected from bridge');
         if (activeClient === client) {
           activeClient = null;
+          log('[WS SERVER] Active client cleared');
         }
       });
       
       client.on('error', (error) => {
-        log(`MCP client WebSocket error: ${error.message}`);
+        log(`[WS SERVER] ❌ MCP client WebSocket error: ${error.message}`);
       });
 
+      log('[WS SERVER] Sending status message to extension...');
       sendToExtension({ type: 'status', connected: true }).catch((err) => {
-        log(`Failed to send status message: ${err.message}`);
+        log(`[WS SERVER] ❌ Failed to send status message: ${err.message}`);
       });
     });
     
     wss.on('error', (error) => {
-      log(`WebSocket server error: ${error.message}`);
+      log(`[WS SERVER] ❌❌❌ CRITICAL ERROR: ${error.message}`);
+      log(`[WS SERVER] Error code: ${error.code}`);
+      log(`[WS SERVER] Error stack: ${error.stack}`);
+      
       if (error.code === 'EADDRINUSE') {
-        log('Port 9224 already in use. Exiting.');
+        log('[WS SERVER] ❌ Port 9224 already in use!');
+        log('[WS SERVER] Another process is using this port');
+        log('[WS SERVER] Exiting...');
         process.exit(1);
       }
     });
 
-    log('WebSocket server listening on ws://localhost:9224');
+    log('[WS SERVER] Event listeners registered');
+    log('[WS SERVER] Waiting for "listening" event...');
     
   } catch (error) {
-    log(`Failed to start WebSocket server: ${error.message}`);
+    log(`[WS SERVER] ❌❌❌ EXCEPTION during startup: ${error.message}`);
+    log(`[WS SERVER] Stack: ${error.stack}`);
   }
 }
 
@@ -350,8 +393,12 @@ function sendToMCPServer(message) {
  * Forward CDP responses to MCP server
  */
 function handleExtensionMessage(message) {
-  // Ignore keep-alive messages
+  // Respond to keep-alive messages to keep connection alive
   if (message.type === 'keep-alive') {
+    log('Received keep-alive from extension, sending acknowledgment');
+    sendToExtension({ type: 'keep-alive-ack', timestamp: Date.now() }).catch((err) => {
+      log(`Failed to send keep-alive ack: ${err.message}`);
+    });
     return;
   }
   
@@ -393,13 +440,54 @@ process.on('SIGINT', shutdown);
 // Main
 // ============================================================================
 
+log('═══════════════════════════════════════════════════════════════');
+log('NATIVE HOST INITIALIZATION STARTING');
+log('═══════════════════════════════════════════════════════════════');
+log(`Process ID: ${process.pid}`);
+log(`Node Version: ${process.version}`);
+log(`Platform: ${process.platform}`);
+log(`Working Directory: ${process.cwd()}`);
+log(`Log File: ${LOG_FILE}`);
+log('═══════════════════════════════════════════════════════════════');
+
 // Set up stdin for binary reading
+log('[STEP 1] Setting up stdin for binary reading...');
 process.stdin.setEncoding(null);
+log('[STEP 1] ✅ stdin encoding set to null (binary mode)');
 
 // Start reading from extension
+log('[STEP 2] Setting up stdin reader for Chrome Extension messages...');
 setupStdinReader();
+log('[STEP 2] ✅ stdin reader configured');
 
 // Start WebSocket server (MCP server will connect to us)
+log('[STEP 3] Starting WebSocket server on port 9224...');
+log('[STEP 3] This server will accept connections from MCP Server');
 startWSServer();
+log('[STEP 3] ✅ WebSocket server initialization complete');
 
+log('═══════════════════════════════════════════════════════════════');
+log('NATIVE HOST READY - Waiting for connections');
+log('═══════════════════════════════════════════════════════════════');
+log('Expected connection flow:');
+log('  1. Chrome Extension → Native Host (via stdin/stdout)');
+log('  2. MCP Server → Native Host (via WebSocket on port 9224)');
+log('═══════════════════════════════════════════════════════════════');
 log('Native host ready');
+
+// Send initial ready message to extension after a short delay
+// This ensures stdout is properly set up
+setTimeout(() => {
+  log('[STARTUP] Sending ready message to extension...');
+  sendToExtension({ 
+    type: 'ready', 
+    timestamp: Date.now(),
+    pid: process.pid,
+    version: '1.0.0'
+  }).then(() => {
+    log('[STARTUP] ✅ Ready message sent successfully');
+  }).catch((err) => {
+    log(`[STARTUP] ⚠️  Failed to send ready message: ${err.message}`);
+    // Don't exit - this is not critical
+  });
+}, 100);

@@ -24,10 +24,16 @@ let targetPort = 9224;
  * Will auto-reconnect if connection fails or drops
  */
 export function startNativeBridge(port = 9224) {
+    console.error("\n┌─────────────────────────────────────────────────────┐");
+    console.error("│  NATIVE BRIDGE - WebSocket Client Initialization   │");
+    console.error("└─────────────────────────────────────────────────────┘");
+    console.error(`🎯 Target: ws://localhost:${port}`);
+    console.error(`🔄 Auto-reconnect: Enabled (every ${RECONNECT_INTERVAL}ms)`);
     targetPort = port;
     return new Promise((resolve) => {
         // Always resolve immediately - connection happens in background
         // This prevents MCP server startup from blocking on native host
+        console.error("✅ Native Bridge initialized (connecting in background)");
         scheduleConnect(true);
         resolve();
     });
@@ -62,32 +68,43 @@ function attemptConnect() {
     const url = `ws://localhost:${targetPort}`;
     reconnectAttempts++;
     if (reconnectAttempts === 1) {
-        console.error(`🔌 Connecting to native host at ${url}...`);
+        console.error(`\n[NATIVE BRIDGE] 🔌 Connecting to native host at ${url}...`);
     }
     else if (reconnectAttempts % 10 === 0) {
-        console.error(`🔌 Still trying to connect to native host... (attempt ${reconnectAttempts})`);
+        console.error(`[NATIVE BRIDGE] 🔄 Still trying to connect... (attempt ${reconnectAttempts})`);
     }
     const ws = new WebSocket(url);
     socket = ws;
     ws.on('open', () => {
-        console.error('✅ Connected to native host');
+        console.error('\n┌─────────────────────────────────────────────────────┐');
+        console.error('│  ✅ NATIVE BRIDGE CONNECTED                         │');
+        console.error('└─────────────────────────────────────────────────────┘');
+        console.error(`📡 WebSocket connection established to Native Host`);
+        console.error(`🔗 Connection: MCP Server ←→ Native Host`);
+        console.error(`⏳ Waiting for Native Host ←→ Chrome Extension link...\n`);
         isConnected = true;
         reconnectAttempts = 0;
     });
     ws.on('message', (data) => {
         try {
             const message = JSON.parse(data.toString());
+            console.error(`[NATIVE BRIDGE] ⬅️  Received from Native Host: ${message.type} (id: ${message.id || 'N/A'})`);
             handleNativeMessage(message);
         }
         catch (error) {
-            console.error('Failed to parse message from native host:', error);
+            console.error('[NATIVE BRIDGE] ❌ Failed to parse message from native host:', error);
         }
     });
     ws.on('close', () => {
-        console.error('❌ Native host connection closed');
+        console.error('\n[NATIVE BRIDGE] ❌ Connection to Native Host closed');
+        console.error('[NATIVE BRIDGE] 🔄 Will attempt to reconnect...');
         isConnected = false;
         socket = null;
         // Reject all pending requests
+        const pendingCount = pendingCDPRequests.size;
+        if (pendingCount > 0) {
+            console.error(`[NATIVE BRIDGE] ⚠️  Rejecting ${pendingCount} pending CDP requests`);
+        }
         for (const [id, pending] of pendingCDPRequests) {
             clearTimeout(pending.timeout);
             pending.reject(new Error('Native host disconnected'));
@@ -102,7 +119,7 @@ function attemptConnect() {
     ws.on('error', (error) => {
         // ECONNREFUSED is expected when native host isn't running yet
         if (error.code !== 'ECONNREFUSED') {
-            console.error('Native host WebSocket error:', error.message);
+            console.error('[NATIVE BRIDGE] ⚠️  WebSocket error:', error.message);
         }
         // Socket will emit 'close' after 'error', which triggers reconnect
     });
@@ -189,19 +206,25 @@ export async function reconnect(timeoutMs = 5000) {
  * Automatically reconnects if needed
  */
 export async function sendCDPCommand(method, params = {}) {
+    console.error(`\n[CDP] 📤 Sending command: ${method}`);
+    console.error(`[CDP] 📋 Params:`, JSON.stringify(params, null, 2));
     // Ensure connection before sending
     if (!isNativeHostConnected()) {
-        console.error(`Connection lost, attempting to reconnect for ${method}...`);
+        console.error(`[CDP] ⚠️  Connection lost, attempting to reconnect...`);
         const connected = await reconnect(5000);
         if (!connected) {
+            console.error(`[CDP] ❌ Reconnection failed`);
             throw new Error('Native host not connected. Make sure the browser extension is connected.');
         }
+        console.error(`[CDP] ✅ Reconnected successfully`);
     }
     const id = messageIdCounter++;
+    console.error(`[CDP] 🆔 Request ID: ${id}`);
     return new Promise((resolve, reject) => {
         // Set up timeout
         const timeout = setTimeout(() => {
             pendingCDPRequests.delete(id);
+            console.error(`[CDP] ⏱️  TIMEOUT for ${method} (id: ${id}) after ${CDP_TIMEOUT}ms`);
             reject(new Error(`CDP command ${method} timed out after ${CDP_TIMEOUT}ms`));
         }, CDP_TIMEOUT);
         // Store pending request
@@ -215,21 +238,25 @@ export async function sendCDPCommand(method, params = {}) {
         };
         try {
             socket.send(JSON.stringify(message));
-            console.error(`Sent CDP command: ${method} (id: ${id})`);
+            console.error(`[CDP] ➡️  Sent to Native Host (id: ${id})`);
+            console.error(`[CDP] ⏳ Waiting for response...`);
         }
         catch (error) {
             clearTimeout(timeout);
             pendingCDPRequests.delete(id);
+            console.error(`[CDP] ❌ Send failed, attempting reconnect and retry...`);
             // Try to reconnect and retry once
             reconnect(3000).then(() => {
                 try {
                     socket.send(JSON.stringify(message));
-                    console.error(`Retried CDP command: ${method} (id: ${id})`);
+                    console.error(`[CDP] 🔄 Retried after reconnect (id: ${id})`);
                 }
                 catch (retryError) {
+                    console.error(`[CDP] ❌ Retry failed:`, retryError);
                     reject(new Error(`Failed to send CDP command: ${retryError.message}`));
                 }
             }).catch(() => {
+                console.error(`[CDP] ❌ Reconnect failed`);
                 reject(new Error(`Failed to send CDP command: ${error.message}`));
             });
         }
@@ -241,26 +268,29 @@ export async function sendCDPCommand(method, params = {}) {
 function handleNativeMessage(message) {
     // Handle CDP responses
     if (message.type === 'cdp_response') {
+        console.error(`[CDP] ⬅️  Response received (id: ${message.id})`);
         const pending = pendingCDPRequests.get(message.id);
         if (pending) {
             clearTimeout(pending.timeout);
             pendingCDPRequests.delete(message.id);
             if (message.error) {
+                console.error(`[CDP] ❌ Error in response:`, message.error);
                 pending.reject(new Error(message.error.message || 'CDP command failed'));
             }
             else {
+                console.error(`[CDP] ✅ Success - returning result to MCP tool handler`);
                 pending.resolve(message.result);
             }
         }
         else {
-            console.error(`Received response for unknown request id: ${message.id}`);
+            console.error(`[CDP] ⚠️  Received response for unknown request id: ${message.id}`);
         }
         return;
     }
     // Handle status messages
     if (message.type === 'status') {
-        console.error('Native host status:', message);
+        console.error('[NATIVE BRIDGE] 📊 Status update:', message);
         return;
     }
-    console.error('Unknown message type from native host:', message.type);
+    console.error('[NATIVE BRIDGE] ⚠️  Unknown message type:', message.type);
 }

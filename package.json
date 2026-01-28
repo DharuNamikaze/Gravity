@@ -1,7 +1,7 @@
 {
-  "name": "devtools-bridge",
+  "name": "gravity",
   "version": "0.1.0",
-  "description": "WebSocket bridge for DevTools MCP integration",
+  "description": "WebSocket bridge for Gravity MCP integration",
   "main": "websocket-bridge.js",
   "scripts": {
     "start": "node websocket-bridge.js",

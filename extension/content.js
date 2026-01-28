@@ -29,7 +29,7 @@
     });
     
     isExtensionReady = true;
-    console.log('DevTools bridge content script ready');
+    console.log('Gravity content script ready');
   }
 
   // Handle WebSocket messages

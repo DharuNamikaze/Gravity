@@ -1,5 +1,5 @@
 // ============================================================================
-// DevTools Bridge - Background Script
+// Gravity - Background Script
 // Handles debugger attachment and native messaging communication
 // ============================================================================
 
@@ -33,10 +33,23 @@ function connectNativeHost() {
   
   try {
     console.log('Connecting to native messaging host...');
-    nativePort = chrome.runtime.connectNative('com.devtools.bridge');
+    nativePort = chrome.runtime.connectNative('com.gravity');
     
     nativePort.onMessage.addListener((message) => {
       console.log('Received from native host:', message);
+      
+      // Handle ready message
+      if (message.type === 'ready') {
+        console.log('✅ Native host is ready:', message);
+        return;
+      }
+      
+      // Handle keep-alive acknowledgment
+      if (message.type === 'keep-alive-ack') {
+        console.log('✅ Keep-alive acknowledged by native host');
+        return;
+      }
+      
       handleNativeMessage(message);
     });
     
@@ -514,4 +527,4 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   }
 });
 
-console.log('DevTools Bridge extension loaded');
+console.log('Gravity extension loaded');

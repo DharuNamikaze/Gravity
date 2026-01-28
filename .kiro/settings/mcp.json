@@ -1,17 +1,15 @@
 {
-    "mcpServers": {
-      "devtools-bridge": {
-        "command": "node",
-        "args": [
-          "D:\\Dharu\\MCP\\Gravity\\mcp-server\\build\\index.js"
-        ],
-        "disabled": false,
-        "autoApprove": [
-          "diagnose_layout",
-          "connect_browser",
-          "get_computed_layout",
-          "highlight_element"
-        ]
-      }
+  "mcpServers": {
+    "gravity": {
+      "command": "D:/Dharu/MCP/Gravity/Gravity/mcp-server/start-server.bat",
+      "args": [],
+      "disabled": false,
+      "autoApprove": [
+        "diagnose_layout",
+        "connect_browser",
+        "get_computed_layout",
+        "highlight_element"
+      ]
     }
+  }
 }
